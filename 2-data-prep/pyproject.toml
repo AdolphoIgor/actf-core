@@ -1,0 +1,77 @@
+[project]
+name = "data-prep"
+version = "0.1.0"
+description = "Silver Data Curation and Pre-Tokenization Pipeline"
+requires-python = ">=3.11"
+dependencies = [
+    "ray[default]>=2.40.0",
+    "pyarrow>=15.0.0",
+    "boto3>=1.34.0",
+    "botocore>=1.34.0",
+    "s3fs>=2024.3.0",
+    "pytest>=8.0.0",
+]
+
+[project.optional-dependencies]
+# CPU-bound data prep steps (Normalization, Deduplication, Heuristics, FastText)
+cpu = [
+    "polars>=0.20.0",
+    "fasttext-wheel>=0.9.2",      # Used for Step 4, 5b, 7a, and 8a
+    "rocksdict>=0.3.21",          # Embedded RocksDB C++ state store (Step 3 Exact Dedup)
+    "pybloom-live>=4.0.0",        # Probabilistic Bloom filter pre-filter (Step 3 Exact Dedup)
+    "rure>=0.2.2",                # Rust regex crate executed via Python bindings
+    "datasketch>=1.6.4",          # MinHash and LSH for Document Deduplication
+    "scipy>=1.10.0",              # Required backend for datasketch LSH probability evaluations
+    "tree-sitter>=0.21.3",        # Core AST C++ parsers
+    "tree-sitter-python>=0.21.0", # Python AST grammar module
+    "pygments>=2.17.2",           # C-implemented lexer backend for Tokenization validation
+    "radon>=6.0.1",               # Cyclomatic Complexity metrics engine
+    "onnxruntime>=1.17.1",        # INT8-quantized domain quality inference execution
+    "sqlglot>=23.0.0",            # Multi-dialect SQL AST fallback parser
+    "transformers>=4.41.0",       # Added to CPU for AutoTokenizer loading
+    "tokenizers>=0.19.0",         # Rust backend for GIL-free parallel encoding
+]
+
+# GPU-dense data prep steps (Quality Classifiers, PII Redaction, Safety Models)
+gpu = [
+    "torch>=2.4.0",                 # Unpinned from ==2.3.1 to resolve vLLM wheel conflicts
+    "vllm>=0.5.0",
+    "transformers>=4.41.0",
+    "triton>=2.3.0",
+    "presidio-analyzer>=2.2.351",   # PII NER and Regex detection
+    "presidio-anonymizer>=2.2.351", # PII Masking engine
+    "spacy>=3.7.4",                 # NLP backend required by Presidio
+    "pylcs>=0.1.1",                 # Fast C++ Longest Common Subsequence for Decontamination
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+# Automatically adds the root directory to sys.path during test collection
+pythonpath = ["."]
+testpaths = ["tests"]
+# Silence harmless third-party deprecation noise from the Rust Regex bindings
+filterwarnings = ["ignore:invalid escape sequence.*:DeprecationWarning:rure.*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [".git", ".venv", "__pycache__", "build", "dist"]
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "F",  # pyflakes
+    "I",  # isort
+    "UP", # pyupgrade
+    "B",  # flake8-bugbear
+]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

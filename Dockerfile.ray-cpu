@@ -1,0 +1,33 @@
+FROM rayproject/ray:2.40.0-py311
+
+USER root
+
+# 1. Install system toolchain (Includes cmake and g++ for C++ extensions)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl gcc g++ cmake procps && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 2. Install uv binary globally
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
+
+# 3. Target Ray's container Python environment
+ENV UV_SYSTEM_PYTHON=1
+
+WORKDIR /home/ray/workspace
+
+# 4. Copy workspace manifests FIRST to leverage Docker layer caching
+COPY ./pyproject.toml ./uv.lock* ./
+COPY ./1-raw-data-ingest/pyproject.toml ./1-raw-data-ingest/
+COPY ./2-data-prep/pyproject.toml ./2-data-prep/
+
+# 5. Pre-install CPU-specific third-party dependencies
+RUN uv pip install --no-cache \
+    -r 1-raw-data-ingest/pyproject.toml \
+    -r 2-data-prep/pyproject.toml --extra cpu
+
+# 6. Copy application code FIRST
+COPY ./1-raw-data-ingest/ ./1-raw-data-ingest/
+COPY ./2-data-prep/ ./2-data-prep/
+
+RUN chown -R ray:users /home/ray/workspace
+
+USER ray

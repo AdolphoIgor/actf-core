@@ -1,0 +1,42 @@
+docker exec -it actf-core-airflow-webserver python -Xfrozen_modules=off -m debugpy --listen 0.0.0.0:5678 --wait-for-client -m airflow tasks test -t '{"load_type": "initial"}' dag_00_simulation_seed_postgres execute_llm_database_hydration 2026-01-01
+docker exec -it actf-core-airflow-webserver python -Xfrozen_modules=off -m debugpy --listen 0.0.0.0:5678 --wait-for-client -m airflow tasks test dag_00_simulation_seed_postgres execute_llm_database_hydration 2026-01-01
+
+docker ps --filter "name=actf-core-airflow-webserver" --format "table {{.Names}}\t{{.Ports}}"
+
+docker logs actf-core-airflow-init
+
+docker compose ps -a
+docker compose up -d
+docker compose up -d --build
+docker compose up -d --build airflow-init airflow-webserver airflow-scheduler
+docker compose build airflow-webserver airflow-scheduler
+docker compose down -v --remove-orphans
+
+
+docker stop $(docker ps -a -q --filter "name=actf") 2>/dev/null || true
+docker rm $(docker ps -a -q --filter "name=actf") 2>/dev/null || true
+docker network rm my_actf_isolated_network actf-network 2>/dev/null || true
+docker volume rm my_actf_postgres_volume my_actf_minio_volume 2>/dev/null || true
+docker builder prune -f
+
+
+
+
+docker exec -it actf-core-airflow-webserver python -Xfrozen_modules=off -m debugpy --listen 0.0.0.0:5678 --wait-for-client -m airflow tasks test -t '{"load_type": "initial"}' dag_02_ingest_source_to_bronze sense_postgres_delta 2026-01-01
+
+
+
+docker exec -it actf-core-airflow-webserver airflow dags trigger dag_02_ingest_source_to_bronze
+docker exec -it actf-core-airflow-webserver airflow dags list-runs -d dag_02_ingest_source_to_bronze
+
+
+# RESTART THE ENVIRONMENT TO INGEST-TO-BRONZE
+docker exec -it actf-core-airflow-webserver python -c "
+import os, boto3
+s3 = boto3.resource('s3', endpoint_url=os.getenv('MINIO_ENDPOINT', 'http://minio-storage:9000'), aws_access_key_id='minioadmin', aws_secret_access_key='minioadmin')
+bucket = s3.Bucket('company-ai-datalake')
+bucket.objects.all().delete()
+print('SUCCESS: MinIO bucket company-ai-datalake cleared.')
+"
+docker exec -it actf-core-airflow-webserver airflow variables delete spark_postgres_high_watermark
+docker exec -it actf-core-airflow-webserver airflow variables delete ray_unstructured_high_watermark
