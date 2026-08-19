@@ -1,106 +1,139 @@
 import os
-import time
 from datetime import datetime, timedelta
+from typing import Any
 
 from airflow import DAG
+from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
-from airflow.utils.trigger_rule import TriggerRule
 
-# Clean import from the Airflow scripts directory
-from scripts.quality_gate_2 import execute_silver_quality_gate
+RAY_ADDRESS = os.environ.get("RAY_ADDRESS", "auto")
+BRONZE_URI = os.environ.get("BRONZE_STORAGE_PATH", "data/bronze")
+SILVER_URI = os.environ.get("SILVER_STORAGE_PATH", "data/silver")
+
+
+def execute_ray_bronze_to_silver_curation(**context) -> dict[str, Any]:
+    """
+    Executes Steps 01 to 10 within Ray Data shared Plasma memory.
+
+    Pipeline Structure:
+    1. Phase 1 (Shared Ingestion): Steps 01 -> 02 -> 03 -> 04 (Routing)
+    2. Phase 2 (In-Memory Branching):
+       - Track A (Prose): Steps 05a -> 06a -> 07a -> 08a
+       - Track B (Technical): Steps 05b -> 06b -> 07b -> 08b
+    3. Phase 3 (Reconvergence): Steps 09 (Safety/PII) -> 10 (Decontamination)
+    """
+    import ray
+    from scripts.phase_01_shared_ingestion.step_01_normalization import UnicodeNormalizer
+    from scripts.phase_01_shared_ingestion.step_02_boilerplate_stripping import BoilerplateStripper
+    from scripts.phase_01_shared_ingestion.step_03_exact_deduplication import ExactDeduplicator
+    from scripts.phase_01_shared_ingestion.step_04_metadata_inspection_and_routing import (
+        MetadataRouter,
+    )
+    from scripts.phase_02_domain_specific_processing.track_a_natural_language.step_05a_standard_heuristics import (
+        StandardHeuristicsFilter,
+    )
+    from scripts.phase_02_domain_specific_processing.track_a_natural_language.step_06a_minhash_fuzzy_deduplication import (
+        MinHashFuzzyDeduplicator,
+    )
+    from scripts.phase_02_domain_specific_processing.track_a_natural_language.step_07a_natural_language_cqf import (
+        NaturalLanguageCQF,
+    )
+    from scripts.phase_02_domain_specific_processing.track_a_natural_language.step_08a_fasttext_language_id import (
+        FastTextLanguageID,
+    )
+    from scripts.phase_02_domain_specific_processing.track_b_specialized_domain.step_05b_code_and_syntax_disambiguation import (
+        CodeSyntaxDisambiguator,
+    )
+    from scripts.phase_02_domain_specific_processing.track_b_specialized_domain.step_06b_code_specific_minhash_ast_deduplication import (
+        CodeASTDeduplicator,
+    )
+    from scripts.phase_02_domain_specific_processing.track_b_specialized_domain.step_07b_domain_quality_check import (
+        DomainQualityChecker,
+    )
+    from scripts.phase_02_domain_specific_processing.track_b_specialized_domain.step_08b_syntax_verification import (
+        SyntaxVerifier,
+    )
+    from scripts.phase_03_reconvergence_and_tokenization.step_09_safety_and_pii_redaction import (
+        SafetyAndPIIRedactor,
+    )
+    from scripts.phase_03_reconvergence_and_tokenization.step_10_cross_dataset_decontamination import (
+        CrossDatasetDecontaminator,
+    )
+
+    try:
+        ray.init(address=RAY_ADDRESS, ignore_reinit_error=True)
+    except Exception:
+        ray.init(ignore_reinit_error=True)
+
+    # -------------------------------------------------------------------------
+    # Phase 1: Shared Ingestion Trunk (Steps 01 - 04)
+    # -------------------------------------------------------------------------
+    ds = ray.data.read_parquet(BRONZE_URI)
+    ds = ds.map_batches(UnicodeNormalizer, batch_format="pyarrow")
+    ds = ds.map_batches(BoilerplateStripper, batch_format="pyarrow")
+    ds = ds.map_batches(ExactDeduplicator, batch_format="pyarrow")
+    ds = ds.map_batches(MetadataRouter, batch_format="pyarrow")
+
+    # Pin in-memory representation before lazy branching to prevent duplicate evaluation
+    ds = ds.materialize()
+
+    # -------------------------------------------------------------------------
+    # Phase 2: In-Memory Domain-Specific Branching (Steps 05 - 08)
+    # -------------------------------------------------------------------------
+    # Track A: Natural Language Prose (branch_id == 0)
+    ds_prose = ds.filter(lambda row: row.get("branch_id", 0) == 0)
+    ds_prose = ds_prose.map_batches(StandardHeuristicsFilter, batch_format="pyarrow")
+    ds_prose = ds_prose.map_batches(MinHashFuzzyDeduplicator, batch_format="pyarrow")
+    ds_prose = ds_prose.map_batches(NaturalLanguageCQF, batch_format="pyarrow")
+    ds_prose = ds_prose.map_batches(FastTextLanguageID, batch_format="pyarrow")
+
+    # Track B: Code & Technical Domains (branch_id == 1)
+    ds_code = ds.filter(lambda row: row.get("branch_id", 0) == 1)
+    ds_code = ds_code.map_batches(CodeSyntaxDisambiguator, batch_format="pyarrow")
+    ds_code = ds_code.map_batches(CodeASTDeduplicator, batch_format="pyarrow")
+    ds_code = ds_code.map_batches(DomainQualityChecker, batch_format="pyarrow")
+    ds_code = ds_code.map_batches(SyntaxVerifier, batch_format="pyarrow")
+
+    # -------------------------------------------------------------------------
+    # Phase 3: Shared Reconvergence & Global Safety (Steps 09 - 10)
+    # -------------------------------------------------------------------------
+    ds_reconverged = ds_prose.union(ds_code)
+    ds_reconverged = ds_reconverged.map_batches(SafetyAndPIIRedactor, batch_format="pyarrow")
+    ds_curated = ds_reconverged.map_batches(CrossDatasetDecontaminator, batch_format="pyarrow")
+
+    os.makedirs(SILVER_URI, exist_ok=True)
+    ds_curated.write_parquet(SILVER_URI)
+
+    return {"status": "SUCCESS", "output_path": SILVER_URI}
+
 
 default_args = {
-    'owner': 'ai_ops',
-    'depends_on_past': False,
-    'start_date': datetime(2026, 1, 1),
-    'email_on_failure': False,
-    'email_on_retry': False,
-    'retries': 1,
-    'retry_delay': timedelta(minutes=1),
+    "owner": "airflow",
+    "depends_on_past": False,
+    "email_on_failure": False,
+    "email_on_retry": False,
+    "retries": 1,
+    "retry_delay": timedelta(minutes=2),
 }
 
-def submit_ray_prep_job(script_name: str, input_path: str, output_path: str):
-    import requests
-    
-    ray_dashboard_url = "http://ray-head:8265"
-    script_full_path = f"/home/ray/workspace/2-data-prep/scripts/{script_name}"
-    
-    entrypoint_cmd = f"python {script_full_path} --input_path {input_path} --output_path {output_path}"
-    job_payload = {"entrypoint": entrypoint_cmd}
-    
-    print(f"Submitting Data Prep job to Ray: {job_payload}")
-    
-    try:
-        resp = requests.post(f"{ray_dashboard_url}/api/jobs/", json=job_payload, timeout=10)
-        resp.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        error_msg = resp.text if 'resp' in locals() and resp is not None else str(e)
-        raise Exception(f"Failed to submit Ray job. Response: {error_msg}")
-
-    job_id = resp.json()["job_id"]
-    
-    current_sleep = 5
-    max_sleep = 60
-
-    while True:
-        try:
-            status_resp = requests.get(f"{ray_dashboard_url}/api/jobs/{job_id}", timeout=10)
-            status_resp.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            print(f"Warning: Failed to fetch status for job {job_id}. Retrying... Error: {e}")
-            time.sleep(current_sleep)
-            continue
-
-        status = status_resp.json()["status"]
-        print(f"Ray Job {job_id} [{script_name}] Status: {status}")
-        
-        if status in ["SUCCEEDED", "STOPPED", "FAILED"]:
-            break
-            
-        time.sleep(current_sleep)
-        current_sleep = min(current_sleep + 5, max_sleep)
-        
-    try:
-        logs_resp = requests.get(f"{ray_dashboard_url}/api/jobs/{job_id}/logs", timeout=15)
-        job_logs = logs_resp.json().get("logs", "") if logs_resp.status_code == 200 else "Unable to retrieve logs."
-    except requests.exceptions.RequestException:
-        job_logs = "Request timeout while fetching logs."
-    
-    print(f"\n=================== RAY JOB LOGS ({job_id}) ===================\n")
-    print(job_logs)
-    print("\n===============================================================\n")
-
-    if status != "SUCCEEDED":
-        raise Exception(f"Ray Data Prep Job {job_id} ({script_name}) failed with status: {status}.")
-
-
 with DAG(
-    dag_id='dag_03_prep_bronze_to_silver',
+    dag_id="3_prep_bronze_to_silver",
     default_args=default_args,
-    description='Silver Data Preparation: Normalization, Cleaning, and Quality Filtering',
+    description="Distributed Ray Data In-Memory Curation: Steps 01 to 10",
     schedule_interval=None,
+    start_date=datetime(2026, 1, 1),
     catchup=False,
-    max_active_runs=1,
+    tags=["curation", "ray", "silver", "actf"],
 ) as dag:
-
-    step_normalization = PythonOperator(
-        task_id='ray_step_normalization',
-        python_callable=submit_ray_prep_job,
-        op_kwargs={
-            'script_name': 'phase_01_shared_ingestion/step_01_normalization.py',
-            'input_path': 's3://company-ai-datalake/bronze/local_filesystem/compliance_documents/',
-            'output_path': 's3://company-ai-datalake/silver/local_filesystem/compliance_documents/normalized/'
-        },
+    ray_curation_task = PythonOperator(
+        task_id="ray_distributed_bronze_to_silver_curation",
+        python_callable=execute_ray_bronze_to_silver_curation,
+        provide_context=True,
     )
 
-    data_quality_gate_2_silver_check = PythonOperator(
-        task_id='data_quality_gate_2_silver_check',
-        python_callable=execute_silver_quality_gate,
-        trigger_rule=TriggerRule.ALL_SUCCESS,
-        op_kwargs={
-            'bucket_name': 'company-ai-datalake',
-            'prefix': 'silver/local_filesystem/compliance_documents/normalized/'
-        },
+    quality_gate_2_task = BashOperator(
+        task_id="data_quality_gate_2_silver_check",
+        bash_command="python /opt/airflow/dags/scripts/quality_gate_2.py",
     )
 
-    step_normalization >> data_quality_gate_2_silver_check
+    ray_curation_task >> quality_gate_2_task
