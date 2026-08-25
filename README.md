@@ -1,117 +1,220 @@
+# ACTF Core: Automated Continuous Training Framework
+
+> **An Enterprise Distributed Continuous Training (CT) and Model Governance Platform**
 
 ---
 
-# ACTF: Automated Continuous Training Framework AI Platform
+## 1. Executive Summary and Platform Architecture
 
-> **An Enterprise-Grade Automated Data Platform & Continuous Training (CT) Pipeline**
+**ACTF Core** is an enterprise-grade reference architecture for automated continuous pre-training, domain adaptation, and supervised fine-tuning (SFT) of foundation models in regulated environments (RegTech, FinTech, Healthcare).
 
----
-
-## 1. Executive Summary & Capabilities
-
-This repository is an **architecture showcase** demonstrating how to design, containerize, and orchestrate an end-to-end **Continuous Training (CT)** pipeline for regulatory compliance and AI applications (RegTech).
-
-It bridges the gap between raw data ingestion and distributed ML model retraining by solving real-world data platform and LLMOps engineering challenges:
-
-* **Production-Grade Decoupling:** Separates Airflow runtime components (`webserver`, `scheduler`, and an idempotent `init` container) to guarantee state persistence across container recreations.
-* **Hybrid Distributed Compute:** Combines **Apache Spark** for high-throughput relational ETL with a **Ray Cluster** (configured with Plasma shared memory) for unstructured data preparation, fuzzy LSH deduplication, and CPU/GPU ML processing.
-* **Dual-Target Execution (CPU Fallback & GPU Profiles):** Native support for ultra-lightweight models (`qwen2.5-0.5b-instruct`) on standard CPU hardware with optional CUDA acceleration via Docker Compose profiles.
-* **Full-Lifecycle LLMOps Stack:** Integrates **DVC** for data versioning, **Axolotl** for fine-tuning, **Weights & Biases** for experiment tracking, **MLflow** for model registry management, and **Promptfoo** for automated quality evaluation gates.
-* **Isolated Quality Gates:** Enforces storage contracts (`quality_gate_1.py`, `quality_gate_2.py`) directly inside the orchestration layer (`orchestrator/dags/scripts/`), preventing corrupt data assets from polluting downstream stages.
-
----
-
-## 2. System Architecture & Tech Stack
-
-### High-Level Architecture Flow
+The platform bridges relational data lakehouses, distributed compute clusters, in-memory autograd engines, and automated statistical evaluation firewalls into an immutable, deterministic training loop.
 
 ```text
-┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
-│  PostgreSQL 16  │ ───>  │  Apache Spark   │ ───>  │  MinIO (S3 API) │
-│   (Source DB)   │       │   (Raw ETL)     │       │ (Bronze/Silver) │
-└─────────────────┘       └─────────────────┘       └─────────────────┘
-                                                             │
-                                                             ▼
-┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
-│ Dataset Control │ <───> │   Ray Cluster   │ <───> │   DVC Tracking  │
-│ (Ray Data/DVC)  │       │(Prep, LSH & ML) │       │ (MinIO / S3)    │
-└─────────────────┘       └─────────────────┘       └─────────────────┘
-         │                         │                         │
-         ▼                         ▼                         ▼
-┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
-│ Fine-Tuning Exec│ ───>  │ Experiment Trk  │ ───>  │ Auto Gatekeeper │ ───> ┌──────────────────┐
-│(Axolotl/PyTorch)│       │ (W&B / MLflow)  │       │(Promptfoo/Eval) │      │ MLflow Registry  │
-└─────────────────┘       └─────────────────┘       └─────────────────┘      └──────────────────┘
-         ▲                         ▲                         ▲
-         │                         │                         │
-┌────────────────────────────────────────────────────────────────────────┐
-│                      Apache Airflow 2.9.2 (DAGs)                       │
-│              (Orchestrator, Scheduler & Webserver)                     │
-└────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                               ACTF CORE END-TO-END SYSTEM TOPOLOGY                               │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+   [ External Sources ]         [ Relational ETL ]           [ Bronze Storage ]       [ Prep & LSH ]
+  ┌───────────────────┐        ┌──────────────────┐        ┌──────────────────┐     ┌────────────────┐
+  │ PostgreSQL / Files│ ─────► │ Apache Spark 3.5 │ ─────► │ MinIO S3 (Bronze)│ ──► │  Ray Data 2.40 │
+  └───────────────────┘        └──────────────────┘        └──────────────────┘     └────────────────┘
+                                                                    │                       │
+                                                      [ Quality Gate 1: Schema ]            ▼
+                                                                                   ┌─────────────────┐
+                                                                                   │ MinIO S3 (Silver│
+                                                                                   └─────────────────┘
+                                                                                            │
+                                                                             [ Quality Gate 2: Clean ]
+                                                                                            │
+   [ MLflow Registry ]         [ Gate 5 Gatekeeper ]        [ Distributed Train ]           ▼
+  ┌───────────────────┐        ┌───────────────────┐        ┌──────────────────┐   ┌─────────────────┐
+  │ @champion Alias   │ ◄───── │ Statistical Test  │ ◄───── │ PyTorch / AdamW  │ ◄─│ Step 11-12 Pack │
+  │ @challenger Canary│        │ McNemar / Wilson  │        │ Ephemeral Export │   └─────────────────┘
+  └───────────────────┘        └───────────────────┘        └──────────────────┘            ▲
+                                         ▲                           ▲                      │
+                                         │                           │          [ Gate 3: Leakage ]
+                                  [ Step 15-16 Eval ]       [ Gate 4: Tensor Health]
+                                         │
+┌────────────────────────────────────────┴─────────────────────────────────────────────────────────┐
+│                   APACHE AIRFLOW 2.9+ ORCHESTRATION & STORAGE LAYER (DAGs 00-05)                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 ```
 
-### Technology Matrix
+### Core Capabilities
+
+* **Decoupled Distributed Compute:** Separates high-throughput relational extraction (Apache Spark) from unstructured distributed tokenization, deduplication, and neural training (Ray Cluster + PyTorch).
+* **5-Tier Quality Firewall:** Enforces storage contracts, data leakage boundaries, tensor graph stability, and statistical non-inferiority across Gates 1 through 5 before allocating compute or traffic.
+* **In-Memory Tensor Pre-Flight (Gate 4):** Validates Step-0 cross-entropy calibration ($\mathcal{L}_0 \approx \ln V$), parameter finite bounds, tied embedding pointers, and autograd gradient flow prior to multi-node training.
+* **Non-Blocking Ephemeral Staging (Steps 13-14):** Decouples GPU execution from network storage latency by staging full recovery states and stripped inference bundles locally to NVMe scratch with background offloading.
+* **Statistical Capability Certification (Gate 5 & Step 17):** Arbitrates candidate promotions using paired McNemar tests, empirical bootstrap confidence intervals, and symmetric LLM-as-a-Judge tournaments before cutting over MLflow Model Registry aliases (`@champion`).
+
+---
+
+## 2. Platform Technology Matrix
 
 | Layer | Technology | Operational Role |
 | --- | --- | --- |
-| **Orchestration** | **Apache Airflow 2.9.2** | Runs in `LocalExecutor` mode. Decoupled into `airflow-init`, `airflow-webserver`, and `airflow-scheduler`. |
-| **Metadata DB** | **PostgreSQL 16** | Shared relational store for Airflow state persistence and source transaction simulation. |
-| **Data Lakehouse** | **MinIO** | Local S3-compatible object storage configured with Medallion buckets (`bronze`, `silver`, `gold`). |
-| **Dataset Control** | **DVC (Data Version Control)** | Tracks raw and processed dataset partitions alongside Git commits for reproducible training runs. |
-| **Structured Compute** | **Apache Spark 3.5** | Master-Worker cluster for high-volume relational data extraction and Bronze layer loading. |
-| **Unstructured Compute** | **Ray Cluster 2.40** | Ray Head + CPU/GPU Workers (Python 3.11) with 8GB shared memory (`/dev/shm`) for distributed data prep and ML. |
-| **Fine-Tuning Engine** | **Axolotl / PyTorch** | Orchestrates instruction tuning for `qwen2.5-0.5b-instruct` (CPU LoRA locally or multi-GPU FSDP in production). |
-| **Experiment Tracking** | **Weights & Biases / MLflow** | Logs training loss curves, hyperparameter sweeps, system telemetry, and model registry artifacts. |
-| **Quality Gatekeeper** | **PyArrow / Promptfoo** | Enforces storage contracts at Bronze/Silver layers and automated LLM assertion checks before model promotion. |
-| **Package Engine** | **Astral `uv**` | Fast Python dependency installer used across custom container image builds (`pyproject.toml` based). |
+| **Orchestration** | Apache Airflow 2.9+ | Master workflow DAG execution with isolated task engines and state persistence. |
+| **Metadata & State** | PostgreSQL 16 | Relational backend for Airflow metadata and synthetic transaction simulation. |
+| **Data Lakehouse** | MinIO (S3 API) | Medallion object storage configured for `bronze`, `silver`, and `gold` partitions. |
+| **Dataset Tracking** | DVC / Parquet | Cryptographic Merkle-root dataset versioning for training lineage. |
+| **Structured Processing** | Apache Spark 3.5 | Parallel relational extraction, schema validation, and Bronze partition writing. |
+| **Unstructured Processing** | Ray Cluster 2.40 | Distributed text normalization, MinHash LSH deduplication, and sequence packing. |
+| **Optimization Engine** | PyTorch 2.2+ / FlashAttention | Mixed-precision training (BF16/FP16), AdamW parameter optimization, and norm clipping. |
+| **Inference Runtime** | vLLM / Hugging Face | High-throughput GPU inference engine with automated CPU fallback. |
+| **Experiment Tracking** | MLflow 2.12+ | Metric logging, parameter tracking, and Model Registry alias lifecycle management. |
+| **Evaluation Suite** | SciPy / Custom Harness | Sandboxed code execution (Pass@1), MMLU log-likelihood, and statistical test engines. |
+| **Package Management** | Astral `uv` | Deterministic dependency resolution across all workspace modules. |
 
 ---
 
-### Repository Structure
+## 3. Five-Tier Quality Firewall Architecture
+
+ACTF Core treats quality enforcement as a sequence of deterministic gates that prevent compute waste and deployment regressions:
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                               ACTF CORE QUALITY FIREWALL MATRIX                                  │
+├────────┬─────────────────────────────┬────────────────────────────────┬──────────────────────────┤
+│ Gate   │ Verification Target         │ Inspection Mechanism           │ Failure Action           │
+├────────┼─────────────────────────────┼────────────────────────────────┼──────────────────────────┤
+│ Gate 1 │ Bronze Storage Contracts    │ Schema matching & byte bounds  │ Quarantine raw payload   │
+├────────┼─────────────────────────────┼────────────────────────────────┼──────────────────────────┤
+│ Gate 2 │ Silver Preparation Cleanliness│ Missingness, text density, LSH │ Halt prep DAG            │
+├────────┼─────────────────────────────┼────────────────────────────────┼──────────────────────────┤
+│ Gate 3 │ Split Contamination Check   │ N-gram & embedding overlap     │ Reject dataset split     │
+├────────┼─────────────────────────────┼────────────────────────────────┼──────────────────────────┤
+│ Gate 4 │ Pre-Flight Tensor Health    │ Step-0 loss ln(V), grad graph  │ Abort training job       │
+├────────┼─────────────────────────────┼────────────────────────────────┼──────────────────────────┤
+│ Gate 5 │ Production Model Gatekeeper │ McNemar, Bootstrap, Wilson CI  │ Lock artifact to @archive│
+└────────┴─────────────────────────────┴────────────────────────────────┴──────────────────────────┘
+
+```
+
+### Detailed Gate Specifications
+
+* **Gate 1 (Bronze Storage Gate):** Asserts non-zero file sizes, strictly valid Parquet footer layouts, and required metadata columns (`source_id`, `ingested_at`, `payload`).
+* **Gate 2 (Silver Parquet Cleanliness Gate):** Asserts zero null identifiers, minimum token counts, valid UTF-8 encoding, and zero exact duplicate documents.
+* **Gate 3 (Split Leakage Gate):** Evaluates 13-gram Jaccard index and embedding cosine similarity between train and evaluation partitions to ensure zero data contamination.
+* **Gate 4 (Pre-Flight Tensor Health Gate):**
+* Verifies absence of NaNs/Infs and dead zero matrices across all parameters.
+* Asserts Step-0 cross-entropy loss satisfies $\vert{}\mathcal{L}_0 - \ln(V)\vert{} \le 0.60\text{ nats}$.
+* Validates tied embedding memory pointers (`tok_emb.weight.data_ptr() == lm_head.weight.data_ptr()`).
+* Asserts 100% autograd gradient flow coverage across all `requires_grad=True` tensors.
+
+
+* **Gate 5 (Automated Production Gatekeeper):**
+* **Tier 1:** 100% AST syntax validity, $\ge 99.0\%$ EOS delimiter compliance, and zero PII leaks.
+* **Tier 2:** Paired McNemar Chi-Square tests ($p \ge 0.05$) and Bootstrap $95\%$ non-inferiority margins ($\Delta \ge -0.5\%$).
+* **Tier 3:** LLM Judge tournament with Wilson $95\%$ confidence interval lower bound $p_{\text{lower}} \ge 0.50$.
+* **Tier 4:** Expected Calibration Error $\text{ECE} \le 0.06$ and Inter-Token Latency SLA compliance.
+
+
+
+---
+
+## 4. Repository Workspace Layout
 
 ```text
 actf-core/
-├── .devcontainer/           # VS Code DevContainer workspace setup
-├── .vscode/                 # Debugger launch configurations (debugpy attach)
-├── 1-raw-data-ingest/       # Spark ETL scripts & PySpark extraction jobs
-├── 2-data-prep/             # Ray Data scripts (normalization, LSH deduplication)
-├── 3-model-training/        # Axolotl training configs, LoRA setup & W&B integration
-├── 4-model-eval/            # Promptfoo eval suites & MLflow Model Registry promotion
-├── data/                    # Local storage volume emulation (Bronze/Silver/Gold)
-├── docs/                    # Architecture Decision Records (ADRs) & guides
-├── orchestrator/            # Airflow platform setup
-│   ├── dags/                # Workflow DAG definitions (dag_00_... to dag_03_...)
-│   │   └── scripts/         # Standalone quality gates (quality_gate_1.py, quality_gate_2.py)
-│   └── logs/                # Mounted execution logs (UID 50000 permissions)
-├── tests/                   # Suite for DAG integrity and platform integration
-├── .env                     # Local environment secrets (git-ignored)
-├── compose.yaml             # Master multi-container Docker Compose setup
-├── Dockerfile.ray-cpu       # Custom Ray cluster image definition (Python 3.11 CPU)
-├── Dockerfile.ray-gpu       # Custom Ray cluster image definition (Python 3.11 CUDA)
-├── pyproject.toml           # Root dependencies & workspace manifests
-└── uv.lock                  # Deterministic dependency lockfile
+├── compose.yaml                  # Multi-container orchestration (CPU & GPU profiles)
+├── Dockerfile.ray-cpu            # Ray Cluster image (Python 3.11, CPU execution)
+├── Dockerfile.ray-gpu            # Ray Cluster image (Python 3.11, CUDA execution)
+├── pyproject.toml                # Monorepo root configuration & linter standards
+├── run_tests.sh                  # 5-Layer platform test runner
+├── 1-raw-data-ingest/            # Module 1: Spark ingestion jobs & tests
+├── 2-data-prep/                  # Module 2: Ray Data normalization & LSH deduplication
+├── 3-model-training/             # Module 3: Distributed parameter optimization
+│   ├── pyproject.toml
+│   ├── README.md
+│   ├── scripts/
+│   │   ├── hardware_engine.py
+│   │   ├── step_11_pre_tokenization_audit_and_schema_alignment.py
+│   │   ├── step_12_tokenization_and_sequence_packing.py
+│   │   ├── step_13_parameter_optimization_loop.py
+│   │   └── step_14_ephemeral_staging_export.py
+│   └── tests/
+├── 4-model-eval/                 # Module 4: Gold benchmarks, LLM judge & Gatekeeper
+│   ├── pyproject.toml
+│   ├── README.md
+│   ├── scripts/
+│   │   ├── gate_05_automated_gatekeeper.py
+│   │   ├── hardware_engine.py
+│   │   ├── step_15_gold_benchmark_evaluation.py
+│   │   ├── step_16_llm_judge_scoring.py
+│   │   └── step_17_mlflow_registry_promotion.py
+│   └── tests/
+├── data/                         # Local storage mount (Bronze/Silver/Gold/Checkpoints)
+└── orchestrator/                 # Airflow workflow orchestration
+    ├── requirements.txt
+    ├── dags/
+    │   ├── dag_00_simulation_seed_postgres.py
+    │   ├── dag_01_simulation_seed_files.py
+    │   ├── dag_02_ingest_source_to_bronze.py
+    │   ├── dag_03_prep_bronze_to_silver.py
+    │   ├── dag_04_train_and_eval_model.py
+    │   ├── dag_05_model_eval.py
+    │   └── scripts/
+    │       ├── quality_gate_1.py
+    │       ├── quality_gate_2.py
+    │       ├── quality_gate_3.py
+    │       └── quality_gate_4.py
+    └── tests/
 
 ```
 
 ---
 
-## 3. Hardware Requirements & Deployment Modes
+## 5. Continuous Training Workflow Lifecycle (DAGs 00 to 05)
 
-The platform supports both CPU-bound local simulation and CUDA-accelerated cloud deployment using **Docker Compose Profiles**.
+```text
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                               AIRFLOW CONTINUOUS TRAINING PIPELINE                               │
+├────────────────────────┬─────────────────────────────────────────────────────────────────────────┤
+│ DAG Identifier         │ Pipeline Phase and Operational Scope                                    │
+├────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ 0_simulation_seed_db   │ Generates synthetic relational transaction data into PostgreSQL.        │
+├────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ 1_simulation_seed_file │ Generates synthetic regulatory filings into raw storage landing zones.  │
+├────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ 2_ingest_to_bronze     │ Dispatches Spark & Ray jobs to land Parquet data; runs Quality Gate 1.  │
+├────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ 3_prep_to_silver       │ Dispatches Ray Data cleaning, LSH deduplication; runs Quality Gate 2.   │
+├────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ 4_train_and_eval_model │ Runs Gate 3 -> Steps 11-14 -> Gate 4 -> Steps 15-16 -> Gate 5 -> Step 17│
+├────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ 5_model_eval           │ Dedicated standalone evaluation, LLM-as-a-Judge, and Gate 5 promotion.  │
+└────────────────────────┴─────────────────────────────────────────────────────────────────────────┘
 
-### Running Local CPU vs. Cloud GPU
+```
 
-* **Local Environment (e.g., CPU-Only Laptop / Workstation):**
-Spins up core infrastructure, Spark, Ray CPU workers, Airflow, and Postgres without requesting GPU drivers.
+---
+
+## 6. Hardware Sizing and Profiles
+
+The platform supports local development and GPU cluster deployments via Docker Compose profiles:
+
+| Service Component | Baseline CPU | Memory Allocation | Operational Purpose |
+| --- | --- | --- | --- |
+| **Airflow (`webserver`, `scheduler`)** | 2.0 Cores | ~3.0 GB | DAG scheduling and execution tracking |
+| **PostgreSQL 16** | 0.5 Cores | ~500 MB | Relational metadata store |
+| **MinIO Object Store** | 0.5 Cores | ~1.0 GB | S3 Medallion storage layer |
+| **Apache Spark (Master + Worker)** | 1.0 Core | ~2.5 GB | Relational transformation cluster |
+| **Ray Cluster (Head + CPU Worker)** | 2.0 Cores | ~8.0 GB (`/dev/shm`) | Distributed tokenization & data prep |
+| **Total Baseline Platform** | **~6.0 Cores** | **~15.0 GB RAM** | **Standard Local Development** |
+
+### Execution Profiles
+
+* **Standard CPU Mode (Local Workstation):**
 ```bash
 docker compose up -d
 
 ```
 
 
-* **Cloud GPU Server (NVIDIA CUDA Hardware Available):**
-Uses the `gpu` profile to instantiate the `ray-worker-gpu` worker alongside the core stack.
+* **CUDA GPU Accelerated Mode (Cloud Cluster):**
 ```bash
 docker compose --profile gpu up -d
 
@@ -121,27 +224,11 @@ docker compose --profile gpu up -d
 
 ---
 
-### Resource & Sizing Guidelines
-
-| Service Component | Minimum CPU Allocation | Baseline RAM Footprint | Operational Role |
-| --- | --- | --- | --- |
-| **Airflow (`webserver`, `scheduler`, `init`)** | 1.5 Cores | ~2.5 GB | DAG scheduling, queuing, web interface |
-| **PostgreSQL 16** | 0.5 Cores | ~500 MB | Airflow state & source DB simulation |
-| **MinIO (S3 API & Console)** | 0.5 Cores | ~1.0 GB | S3 Medallion storage buckets |
-| **Apache Spark (Master + Worker)** | 1.0 Core | ~2.5 GB | Relational Spark cluster standby |
-| **Ray Cluster (Head + CPU Worker)** | 1.5 Cores | ~8.0 GB (`/dev/shm`) | Shared memory plasma store standby |
-| **Total Core Stack Baseline** | **~5.0 Cores** | **~14.5 GB RAM** | **Always-On Infrastructure** |
-
-* **Development Minimum:** 4–8 Cores, 24–32 GB System RAM (Executes DAGs sequentially).
-* **Production Recommended:** 8+ Cores, 32+ GB System RAM + Dedicated NVIDIA GPU (Supports concurrent DAG runs).
-
----
-
-## 4. Quickstart Guide
+## 7. Quickstart Guide
 
 ### 1. Environment Configuration
 
-Create a `.env` file in the project root (**do not commit credentials to source control**):
+Create a `.env` file in the project root:
 
 ```bash
 # Database Credentials
@@ -149,128 +236,105 @@ POSTGRES_USER=admin
 POSTGRES_PASSWORD=secure_password_123
 POSTGRES_DB=enterprise_db
 
-# Airflow Admin Setup
+# Airflow Administrative User
 AIRFLOW_ADMIN_USER=admin
 AIRFLOW_ADMIN_PASSWORD=admin_password
 
-# External Telemetry & APIs
-GEMINI_API_KEY=your_gemini_api_key_here
-WANDB_API_KEY=your_wandb_api_key_here
-MLFLOW_TRACKING_URI=http://localhost:5000
+# Telemetry and Tracking
+MLFLOW_TRACKING_URI=http://mlflow-server:5000
+WANDB_API_KEY=your_wandb_key_optional
 
-# Local Model Target
+# Model Architecture Configuration
 LOCAL_MODEL_NAME=Qwen/Qwen2.5-0.5B-Instruct
+BASELINE_MODEL_NAME=Qwen/Qwen2.5-0.5B-Instruct
+MAX_VRAM_USAGE_RATIO=0.85
 
 ```
 
-### 2. Log Permissions Setup
+### 2. File and Log Permissions
 
-Airflow runs under unprivileged container user `airflow` (UID `50000`). Grant write permissions to the host log directory:
+Airflow runs under unprivileged container UID `50000`:
 
 ```bash
-mkdir -p orchestrator/logs
-sudo chown -R 50000:0 orchestrator/logs
+mkdir -p orchestrator/logs data/checkpoints data/evaluation
+sudo chown -R 50000:0 orchestrator/logs data
 
 ```
 
-### 3. Launch the Stack
+### 3. Build and Launch Services
 
 ```bash
-# Build and launch CPU core services
+# Build base infrastructure and start services
 docker compose up -d --build
 
-# Optional: Launch with GPU worker enabled
-docker compose --profile gpu up -d --build
-
 ```
 
 ---
 
-## 5. Web Console & Port Mapping Reference
+## 8. Web Endpoints and Service Console Reference
 
-Access dashboards once containers report healthy:
-
-| Service | Web UI Endpoint | Credentials / Details |
+| Service Interface | URL Endpoint | Credentials / Role |
 | --- | --- | --- |
-| **Airflow Webserver** | `http://localhost:8081` | Configured via `.env` |
+| **Airflow Webserver** | `http://localhost:8081` | Defined in `.env` |
 | **MinIO Console** | `http://localhost:9001` | `minioadmin` / `minioadmin` |
-| **MinIO S3 API** | `http://localhost:9000` | AWS S3 SDK / Boto3 Endpoint |
-| **Spark Master UI** | `http://localhost:8080` | Spark Cluster Status & Jobs |
-| **Ray Dashboard** | `http://localhost:8265` | Ray Resources & Active Actors |
-| **MLflow UI** | `http://localhost:5000` | Experiment Runs & Model Registry |
-| **PostgreSQL DB** | `localhost:5432` | Configured via `.env` |
+| **MinIO S3 API** | `http://localhost:9000` | S3 SDK Endpoint (`data` bucket) |
+| **MLflow UI** | `http://localhost:5000` | Tracking & Model Registry (`@champion`) |
+| **Spark Master UI** | `http://localhost:8080` | Spark Cluster Status |
+| **Ray Dashboard** | `http://localhost:8265` | Ray Distributed Resource Telemetry |
+| **PostgreSQL DB** | `localhost:5432` | Relational Storage Backend |
 
 ---
 
-## 6. Pipeline DAG Lifecycle
+## 9. Testing and Quality Assurance
 
-The Continuous Training pipeline consists of six sequential DAGs:
-
-1. **`dag_00_simulation_seed_postgres.py`** (`0_simulation_seed_postgres`): Generates synthetic relational data using Gemini API fallback pools and inserts it into PostgreSQL.
-2. **`dag_01_simulation_seed_files.py`** (`1_simulation_seed_files`): Generates unstructured text documents with boundary delimiters for file landing zones.
-3. **`dag_02_ingest_source_to_bronze.py`** (`2_ingest_source_to_bronze`): Triggers PySpark relational extraction and Ray Data document ingestion into MinIO Bronze Parquet storage, ending with **Quality Gate 1**.
-4. **`dag_03_prep_bronze_to_silver.py`** (`3_prep_bronze_to_silver`): Dispatches Ray Data jobs for Unicode normalization and text cleaning, ending with **Quality Gate 2**.
-5. **`dag_04_train_model.py`** (`4_train_model`): Executes fine-tuning via Ray/Axolotl, streaming loss metrics directly to Weights & Biases.
-6. **`dag_05_model_eval.py`** (`5_model_eval`): Runs Promptfoo evaluation benchmark suites and promotes passing candidates to the MLflow Model Registry.
-
----
-
-## 7. Quality Control, Testing & Debugging
-
-### The 4-Layer Testing Strategy
-
-```text
-┌─────────────────────────────────────────────────────────────────────────┐
-│ 1. DAG Integrity & Topology Tests (Fast CI/CD Signal)                   │
-│    - Verifies DAG imports, zero syntax errors, and valid DAG structures.│
-├─────────────────────────────────────────────────────────────────────────┤
-│ 2. Transformation Unit Tests (Logic Validation)                         │
-│    - Validates regexes, PySpark functions, and PyArrow logic via pytest.│
-├─────────────────────────────────────────────────────────────────────────┤
-│ 3. In-Pipeline Quality Gates (Runtime Storage Contracts)                │
-│    - Gates 1 and 2 check non-zero file sizes and schemas in Airflow.   │
-├─────────────────────────────────────────────────────────────────────────┤
-│ 4. Automated Model Gatekeeper (Evaluation Suite)                        │
-│    - Promptfoo + MLflow validation before registering model checkpoints.│
-└─────────────────────────────────────────────────────────────────────────┘
-
-```
-
-#### Executing Unit Tests
-
-Run tests inside the orchestrator environment:
+ACTF Core uses a 5-layer testing strategy spanning every module:
 
 ```bash
-# Run DAG integrity and Quality Gate unit tests
-docker exec -it actf-core-airflow-webserver pytest /opt/airflow/tests/
+# Execute the complete containerized test suite
+chmod +x run_tests.sh
+./run_tests.sh
+
+```
+
+### Targeted Module Testing
+
+```bash
+# Layer 1: Airflow DAG Integrity Tests
+docker exec -it actf-core-airflow-webserver pytest /opt/airflow/tests/ -v
+
+# Layer 4: Model Training Module Tests
+docker exec -it actf-core-ray-head pytest /home/ray/workspace/3-model-training/tests/ -v
+
+# Layer 5: Model Evaluation and Gate 5 Tests
+docker exec -it actf-core-ray-head pytest /home/ray/workspace/4-model-eval/tests/ -v
 
 ```
 
 ---
 
-### Developer Debugging Playbook
+## 10. Developer Troubleshooting Playbook
 
-#### 1. Instant CLI Task Execution (`airflow tasks test`)
+### 1. Direct CLI Task Testing
 
-Bypass scheduler loops to test task logic directly in your terminal:
+Bypass the Airflow scheduler loop to run task logic directly in your shell:
 
 ```bash
-docker exec -it actf-core-airflow-webserver airflow tasks test 2_ingest_source_to_bronze spark_parallel_bronze_extraction 2026-01-01
+docker exec -it actf-core-airflow-webserver airflow tasks test 4_train_and_eval_model tensor_quality_gate_4_preflight_check 2026-01-01
 
 ```
 
-#### 2. Visual Remote Debugging via VS Code (`debugpy`)
+### 2. Interactive Breakpoint Debugging with `debugpy`
 
-You can use visual breakpoints directly from VS Code on your host machine:
+To attach VS Code to a running Airflow task:
 
-1. **Expose debug port `5678**` in `compose.yaml` under `airflow-webserver`.
-2. **Add configuration** to `.vscode/launch.json`:
+1. Expose port `5678` under `airflow-webserver` in `compose.yaml`.
+2. Configure `.vscode/launch.json`:
 ```json
 {
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Python: Attach to Airflow Container",
+      "name": "Attach to Airflow Container",
       "type": "debugpy",
       "request": "attach",
       "connect": { "host": "localhost", "port": 5678 },
@@ -287,11 +351,12 @@ You can use visual breakpoints directly from VS Code on your host machine:
 ```
 
 
-3. **Execute the task with the `debugpy` listener**:
+3. Launch the task listener inside the container:
 ```bash
-docker exec -it actf-core-airflow-webserver python -m debugpy --listen 0.0.0.0:5678 --wait-for-client -m airflow tasks test 2_ingest_source_to_bronze data_quality_gate_1_bronze_check 2026-01-01
+docker exec -it actf-core-airflow-webserver python -m debugpy --listen 0.0.0.0:5678 --wait-for-client -m airflow tasks test 4_train_and_eval_model step_13_14_training_and_staging 2026-01-01
 
 ```
 
 
-4. Press **F5** in VS Code to attach the debugger to the live container process.
+4. Press **F5** in VS Code to attach and step through breakpoints.
+

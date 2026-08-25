@@ -1,73 +1,122 @@
+# Model Evaluation and Gatekeeper Engine (`4-model-eval`)
 
-# Phase 4: Model Evaluation & Serving (`4-model-eval`)
-
-This directory contains evaluation benchmarks, quality metrics, and high-throughput inference routines for validated model checkpoints.
+The `4-model-eval` module governs the empirical capability auditing, qualitative evaluation, statistical non-inferiority certification, and automated model registry lifecycle of candidate foundation model checkpoints. It implements **Gate 5 (The Automated Gatekeeper)** to enforce zero-tolerance safety invariants and statistical quality baselines prior to production deployment.
 
 ---
 
-## Architecture Overview
+## Evaluation & Promotion Lifecycle
 
-Phase 4 evaluates model outputs against compliance benchmarks. It supports both standard Hugging Face PyTorch CPU inference for local validation and C++ CUDA-accelerated engines (`vLLM` / `FlashAttention`) for high-throughput batch evaluation.
-
-### Folder Structure
+```text
+[ Staged Model Artifact ]
+           │
+           ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│ 4-MODEL-EVALUATION PIPELINE LIFECYCLE                                  │
+├────────────────────────────────────────────────────────────────────────┤
+│ Step 15: Gold Benchmark Evaluation                                     │
+│   • Length-normalized multiple-choice log-likelihood ranking (MMLU).   │
+│   • Exact-match generative arithmetic with Chain-of-Thought (GSM8K).   │
+│   • Sandboxed subprocess execution for functional code (HumanEval).    │
+│   • Deterministic JSON and Python AST schema validation.               │
+│                                                                        │
+│ Step 16: LLM-as-a-Judge Scoring                                        │
+│   • Symmetric pairwise tournament evaluations (Forward and Reverse).   │
+│   • Wilson 95% confidence interval estimation on effective win rates.  │
+│   • Position bias detection and neutralization.                        │
+│                                                                        │
+│ Gate 5: Automated Gatekeeper Decision Engine                           │
+│   • Tier 1: Zero-tolerance invariants (AST syntax, EOS, PII, KV-cache).│
+│   • Tier 2: McNemar Chi-Square and Bootstrap non-inferiority testing.  │
+│   • Tier 3: LLM Judge statistical certification (p_lower >= 0.50).     │
+│   • Tier 4: Expected Calibration Error (ECE <= 0.06) and latency SLAs. │
+│                                                                        │
+│ Step 17: MLflow Model Registry Promotion                               │
+│   • Cryptographic SHA-256 weight hash validation against receipts.     │
+│   • Atomic alias cutovers (@champion, @challenger, @quarantined).      │
+│   • Automated emergency rollback hooks to @archived versions.          │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                    ┌───────────────┴───────────────┐
+                    ▼                               ▼
+       [ Production: @champion ]       [ Quarantined: @quarantined ]
 
 ```
 
+---
+
+## Directory Layout
+
+```text
 4-model-eval/
 ├── pyproject.toml
 ├── README.md
-└── scripts/
-└── hardware_engine.py  # Dual-engine fallback selector (vLLM vs HF Transformers)
+├── scripts/
+│   ├── __init__.py
+│   ├── gate_05_automated_gatekeeper.py
+│   ├── hardware_engine.py
+│   ├── step_15_gold_benchmark_evaluation.py
+│   ├── step_16_llm_judge_scoring.py
+│   └── step_17_mlflow_registry_promotion.py
+└── tests/
+    ├── __init__.py
+    ├── test_gate_05_automated_gatekeeper.py
+    ├── test_hardware_engine.py
+    ├── test_step_15_gold_benchmark_evaluation.py
+    ├── test_step_16_llm_judge_scoring.py
+    └── test_step_17_mlflow_registry_promotion.py
 
 ```
 
 ---
 
-## Dual Inference Engine (`scripts/hardware_engine.py`)
+## Script Architecture
 
-Because acceleration libraries like `vLLM` and `vllm-flash-attn` strictly require NVIDIA CUDA hardware (and fail to compile on CPU-only machines), evaluation scripts implement a runtime fallback mechanism.
+### Hardware Engine (`scripts/hardware_engine.py`)
 
-### Hardware Detection Logic
+* `get_evaluation_setup(model_id)`: Resolves compute devices and initializes PyTorch Causal LMs with matching tokenizers for log-likelihood and AST evaluations.
+* `get_inference_engine(model_id)`: Initializes `vLLM` on GPU clusters or falls back to Hugging Face on CPU.
 
-```
-           ┌──────────────────────────────┐
-           │  torch.cuda.is_available()?  │
-           └──────────────┬───────────────┘
-                          │
-           ┌──────────────┴──────────────┐
-           │                             │
-        [ YES ]                       [ NO ]
-           │                             │
-           ▼                             ▼
-┌──────────────────────┐     ┌──────────────────────────┐
-│    vLLM Engine       │     │ Hugging Face Transformers│
-│ High-Throughput CUDA │     │ PyTorch CPU Fallback     │
-└──────────────────────┘     └──────────────────────────┘
+### Step 15: Gold Benchmark Evaluation (`scripts/step_15_gold_benchmark_evaluation.py`)
 
-```
+* Runs deterministic capability audits across multiple tasks.
+* Employs length-normalized log-likelihood scoring for multiple-choice benchmarks.
+* Executes generated code in isolated subprocesses with timeout constraints.
+* Generates a composite capability scorecard across all target domains.
 
-### Engine Selection Matrix
+### Step 16: LLM-as-a-Judge Scoring (`scripts/step_16_llm_judge_scoring.py`)
 
-| Target Engine | Device | Acceleration Features | Primary Use Case |
-| :--- | :--- | :--- | :--- |
-| **vLLM** | NVIDIA CUDA | PagedAttention, Continuous Batching | Cloud Production Batch Eval |
-| **HF Transformers** | CPU | Native PyTorch execution | Local Pipeline Validation |
+* Manages pairwise tournament scoring between candidate models and production baselines.
+* Executes symmetric forward and reverse trials to eliminate position bias.
+* Computes Wilson score confidence intervals to ensure non-inferiority.
+
+### Gate 5: Automated Gatekeeper (`scripts/gate_05_automated_gatekeeper.py`)
+
+* Evaluates candidates across a hierarchical four-tier framework.
+* Applies paired McNemar Chi-Square tests and empirical bootstrap confidence intervals.
+* Verifies probability calibration via Expected Calibration Error (ECE) and latency SLAs.
+* Emits signed `GatekeeperReceipt` JSON artifacts required for registry promotion.
+
+### Step 17: MLflow Registry Promotion (`scripts/step_17_mlflow_registry_promotion.py`)
+
+* Interfaces with MLflow Model Registry using Model Aliases.
+* Enforces SHA-256 weight hash validation against signed Gate 5 receipts.
+* Atomically cuts over `@champion` aliases and demotes prior versions to `@archived`.
+* Provides one-call emergency rollback capabilities.
 
 ---
 
-## Future Execution Workflow
+## Testing
 
-When activating Phase 4:
+Run unit tests from the workspace root or the package directory:
 
-1. **Local CPU Validation:**
-   ```bash
-   python scripts/hardware_engine.py --model_id "Qwen/Qwen2.5-0.5B-Instruct" --eval_dataset "s3://company-ai-datalake/gold/eval/"
-
-```
-
-2. **Cloud High-Throughput GPU Evaluation:**
-Spin up the cluster with GPU capabilities:
 ```bash
-docker compose --profile gpu up -d
+# Run all evaluation and gatekeeper unit tests
+pytest 4-model-eval/tests/ -v
+
+# Run Gate 5 decision engine tests
+pytest 4-model-eval/tests/test_gate_05_automated_gatekeeper.py -v
+
+# Run MLflow registry promotion tests
+pytest 4-model-eval/tests/test_step_17_mlflow_registry_promotion.py -v
 
 ```

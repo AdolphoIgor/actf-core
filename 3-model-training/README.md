@@ -1,55 +1,37 @@
+# Model Training Engine (`3-model-training`)
 
-# Phase 3: Model Training (`3-model-training`)
-
-This directory houses the training, fine-tuning (LoRA / QLoRA), and checkpoint management workflows for the **Qwen2.5-0.5B-Instruct** model.
-
----
-
-## Architecture Overview
-
-Training routines are designed to run dynamically across both local resource-constrained CPU development environments and high-throughput Cloud GPU infrastructure.
-
-### Folder Structure
-
-```
-
-3-model-training/
-├── pyproject.toml
-├── README.md
-└── scripts/
-└── hardware_engine.py  # Runtime GPU/CPU detection & engine selector
-
-```
+The `3-model-training` module encapsulates the parameter optimization, distributed execution, and checkpoint lifecycle stages of the ACTF continuous training pipeline. It accepts curated Silver-tier datasets from Phase 1-3, verifies in-memory computational graph stability via **Gate 4**, and executes mixed-precision parameter updates before staging artifacts for downstream evaluation.
 
 ---
 
-## Hardware Fallback Engine (`scripts/hardware_engine.py`)
+## Architecture and Pipeline Scope
 
-To ensure seamless execution across local testing (e.g., CPU-only laptop) and Cloud production environments, utility scripts in this directory utilize dynamic PyTorch hardware detection.
+The module coordinates execution from pre-tokenization checks through asynchronous artifact offloading:
 
-### Engine Selection Matrix
-
-| Environment | Detected Hardware | Selected Framework | Precision / Device |
-| :--- | :--- | :--- | :--- |
-| **Local Dev / Testing** | CPU Only | Hugging Face `transformers` + `peft` | `torch.float32` on `cpu` |
-| **Cloud Cluster** | NVIDIA GPU (CUDA) | `transformers` + `accelerate` / DeepSpeed | `torch.bfloat16` or `float16` on `cuda` |
-
----
-
-## Future Execution Workflow
-
-When activating Phase 3:
-
-1. **Local CPU Fine-Tuning (0.5B Model):**
-    ```bash
-    python scripts/hardware_engine.py --model_id "Qwen/Qwen2.5-0.5B-Instruct" --mode train
-    ```
-
-    *Uses standard PyTorch CPU allocation. Supported by 32GB system RAM.*
-
-2. **Cloud GPU Multi-Node Training:**
-    Ensure Docker Compose is booted with the `gpu` profile:
-    ```bash
-    docker compose --profile gpu up -d
-    ```
----
+```text
+[ Curated Silver Dataset ]
+          │
+          ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│ 3-MODEL-TRAINING PIPELINE LIFECYCLE                                    │
+├────────────────────────────────────────────────────────────────────────┤
+│ Step 11: Pre-Tokenization Audit and Schema Alignment                   │
+│   • Validates structural column layouts and character encodings.      │
+│                                                                        │
+│ Step 12: Tokenization and Sequence Packing                             │
+│   • Applies tokenizer vocabs and packs sequences to max context length.│
+│                                                                        │
+│ Gate 4: Pre-Flight Tensor and Gradient Health Gate                     │
+│   • Verifies zero NaNs/Infs, Step-0 loss ln(V), tied pointers, and VRAM.│
+│                                                                        │
+│ Step 13: Distributed Parameter Optimization Loop                       │
+│   • Executes AdamW optimization, cosine warmup decay, and grad clipping│
+│   • Supports BFloat16/FP16 mixed precision and gradient accumulation.  │
+│                                                                        │
+│ Step 14: Ephemeral Staging Export and Asynchronous Offloading          │
+│   • Synchronously stages recovery and stripped inference bundles.      │
+│   • Dispatches background uploads with checksum validation.            │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                                    ▼
+                     [ 4-model-eval / Gate 5 ]
