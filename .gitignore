@@ -27,3 +27,4 @@ checkpoints/
 *.ruff_cache
 
 orchestrator/logs/
+test_run.log
