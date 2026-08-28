@@ -8,14 +8,14 @@ def dagbag():
 
 
 def test_dag_05_loaded(dagbag):
-    dag = dagbag.get_dag(dag_id="5_model_eval")
+    dag = dagbag.get_dag(dag_id="dag_05_model_eval")
     assert dagbag.import_errors == {}, f"DAG import errors: {dagbag.import_errors}"
     assert dag is not None
     assert len(dag.tasks) == 4
 
 
 def test_dag_05_task_dependencies(dagbag):
-    dag = dagbag.get_dag(dag_id="5_model_eval")
+    dag = dagbag.get_dag(dag_id="dag_05_model_eval")
 
     benchmarks_task = dag.get_task("step_15_gold_benchmark_evaluation")
     judge_task = dag.get_task("step_16_llm_judge_scoring")
@@ -28,7 +28,7 @@ def test_dag_05_task_dependencies(dagbag):
 
 
 def test_dag_05_metadata_and_defaults(dagbag):
-    dag = dagbag.get_dag(dag_id="5_model_eval")
+    dag = dagbag.get_dag(dag_id="dag_05_model_eval")
     assert dag.default_args["owner"] == "airflow"
     assert dag.default_args["retries"] == 0
     assert dag.catchup is False
