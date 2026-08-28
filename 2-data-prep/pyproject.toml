@@ -34,14 +34,15 @@ cpu = [
 
 # GPU-dense data prep steps (Quality Classifiers, PII Redaction, Safety Models)
 gpu = [
-    "torch>=2.4.0",                 # Unpinned from ==2.3.1 to resolve vLLM wheel conflicts
+    "torch>=2.4.0",                                                                                                                            # Unpinned from ==2.3.1 to resolve vLLM wheel conflicts
     "vllm>=0.5.0",
     "transformers>=4.41.0",
     "triton>=2.3.0",
-    "presidio-analyzer>=2.2.351",   # PII NER and Regex detection
-    "presidio-anonymizer>=2.2.351", # PII Masking engine
-    "spacy>=3.7.4",                 # NLP backend required by Presidio
-    "pylcs>=0.1.1",                 # Fast C++ Longest Common Subsequence for Decontamination
+    "presidio-analyzer>=2.2.351",                                                                                                              # PII NER and Regex detection
+    "presidio-anonymizer>=2.2.351",                                                                                                            # PII Masking engine
+    "spacy>=3.7.4",                                                                                                                            # NLP backend required by Presidio
+    "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",
+    "pylcs>=0.1.1",                                                                                                                            # Fast C++ Longest Common Subsequence for Decontamination
 ]
 
 [build-system]
@@ -53,7 +54,14 @@ build-backend = "hatchling.build"
 pythonpath = ["."]
 testpaths = ["tests"]
 # Silence harmless third-party deprecation noise from the Rust Regex bindings
-filterwarnings = ["ignore:invalid escape sequence.*:DeprecationWarning:rure.*"]
+filterwarnings = [
+    "ignore:invalid escape sequence.*:DeprecationWarning",
+    "ignore:builtin type SwigPy.*:DeprecationWarning",
+    "ignore:builtin type swigvarlink.*:DeprecationWarning",
+    "ignore:Deprecated in 0.9.0.*:DeprecationWarning",
+    "ignore::DeprecationWarning:typer.*",
+    "ignore::DeprecationWarning:click.*",
+]
 
 [tool.ruff]
 target-version = "py311"
@@ -75,3 +83,6 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
+
+[tool.uv]
+package = false
