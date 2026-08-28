@@ -8,14 +8,14 @@ def dagbag():
 
 
 def test_dag_04_loaded(dagbag):
-    dag = dagbag.get_dag(dag_id="4_train_and_eval_model")
+    dag = dagbag.get_dag(dag_id="dag_04_model_train")
     assert dagbag.import_errors == {}, f"DAG import errors: {dagbag.import_errors}"
     assert dag is not None
     assert len(dag.tasks) == 6
 
 
 def test_dag_04_task_order(dagbag):
-    dag = dagbag.get_dag(dag_id="4_train_and_eval_model")
+    dag = dagbag.get_dag(dag_id="dag_04_model_train")
 
     gate3_task = dag.get_task("data_quality_gate_3_leakage_check")
     tokenize_task = dag.get_task("step_11_12_tokenization_and_packing")
@@ -32,7 +32,7 @@ def test_dag_04_task_order(dagbag):
 
 
 def test_dag_04_default_args(dagbag):
-    dag = dagbag.get_dag(dag_id="4_train_and_eval_model")
+    dag = dagbag.get_dag(dag_id="dag_04_model_train")
     assert dag.default_args["owner"] == "airflow"
     assert dag.default_args["retries"] == 0
     assert dag.catchup is False
