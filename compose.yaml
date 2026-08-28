@@ -48,6 +48,7 @@ x-ray-worker-defaults: &ray-worker-defaults
     - ./1-raw-data-ingest:/home/ray/workspace/1-raw-data-ingest:ro
     - ./2-data-prep:/home/ray/workspace/2-data-prep:ro
     - ./3-model-training:/home/ray/workspace/3-model-training:ro
+    - ./4-model-eval:/home/ray/workspace/4-model-eval:ro
     # Storage mounts
     - ./data:/opt/airflow/data:ro
     - ./models:/opt/models:ro
@@ -237,6 +238,7 @@ services:
       - ./1-raw-data-ingest:/home/ray/workspace/1-raw-data-ingest:ro
       - ./2-data-prep:/home/ray/workspace/2-data-prep:ro
       - ./3-model-training:/home/ray/workspace/3-model-training:ro
+      - ./4-model-eval:/home/ray/workspace/4-model-eval:ro
       - ./data:/opt/airflow/data:ro
       - ./models:/opt/models:ro
     networks:
