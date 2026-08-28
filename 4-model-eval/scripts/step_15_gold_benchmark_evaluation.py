@@ -1,6 +1,7 @@
 import json
 import math
 import multiprocessing
+import queue
 import re
 import time
 from typing import Any
@@ -26,6 +27,10 @@ def _code_execution_worker(full_code: str, entry_point: str, result_queue: multi
         result_queue.put({"status": "PASSED", "error": None})
     except Exception as e:
         result_queue.put({"status": "FAILED", "error": f"{type(e).__name__}: {str(e)}"})
+    finally:
+        # Guarantee the multiprocessing.Queue background thread flushes to the OS pipe
+        # before the child process violently exits and destroys the buffer.
+        time.sleep(0.1)
 
 
 class GoldBenchmarkEvaluator:
@@ -233,20 +238,32 @@ class GoldBenchmarkEvaluator:
 
     def _run_sandboxed_test(self, full_code: str, entry_point: str) -> bool:
         ctx = multiprocessing.get_context("spawn")
-        queue = ctx.Queue()
-        process = ctx.Process(target=_code_execution_worker, args=(full_code, entry_point, queue))
+        res_queue = ctx.Queue()
+        process = ctx.Process(
+            target=_code_execution_worker, args=(full_code, entry_point, res_queue)
+        )
         process.start()
-        process.join(timeout=self.timeout)
 
-        if process.is_alive():
-            process.terminate()
+        passed = False
+        try:
+            # Block safely. Add 15.0s to account for massive PyTorch cold-start import overhead.
+            res = res_queue.get(timeout=self.timeout + 15.0)
+            if res.get("status") == "PASSED":
+                passed = True
+            elif res.get("status") == "FAILED":
+                print(f"Sandbox Failed: {res.get('error')}")
+        except queue.Empty:
+            print("Sandbox Timed Out")
+            passed = False
+        except Exception as e:
+            print(f"Sandbox Exception: {e}")
+            passed = False
+        finally:
+            if process.is_alive():
+                process.terminate()
             process.join()
-            return False
 
-        if not queue.empty():
-            res = queue.get()
-            return res.get("status") == "PASSED"
-        return False
+        return passed
 
     @torch.no_grad()
     def evaluate_schema_integrity(
