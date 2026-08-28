@@ -49,7 +49,7 @@ def test_audit_silver_parquet_files_empty_dir(tmp_path):
     empty_dir = tmp_path / "empty_silver"
     empty_dir.mkdir()
 
-    with pytest.raises(AssertionError, match="Failed to load Parquet dataset"):
+    with pytest.raises(AssertionError, match="No Parquet files found in Silver path"):
         audit_silver_parquet_files(str(empty_dir))
 
 
