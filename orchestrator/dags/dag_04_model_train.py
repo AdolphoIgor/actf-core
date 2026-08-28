@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from airflow import DAG
@@ -220,6 +220,13 @@ def execute_mlflow_promotion(**context) -> dict[str, Any]:
     return promotion_summary
 
 
+DAG_DOC_MD = """
+# Continuous LLM Fine-Tuning Pipeline (`dag_04_model_train`)
+
+Executes Ray Train distributed fine-tuning and parameter optimization against
+curated Silver datasets, enforcing tensor invariants and validation checkpoints.
+"""
+
 default_args = {
     "owner": "airflow",
     "depends_on_past": False,
@@ -230,13 +237,13 @@ default_args = {
 }
 
 with DAG(
-    dag_id="4_train_and_eval_model",
+    dag_id="dag_04_model_train",
     default_args=default_args,
-    description="ACTF Continuous Training & Evaluation: Steps 11-17 & Gates 3-5",
-    schedule_interval=None,
-    start_date=datetime(2026, 1, 1),
+    schedule=None,
     catchup=False,
-    tags=["training", "evaluation", "gatekeeper", "mlflow", "actf"],
+    max_active_runs=1,
+    tags=["training", "ray_train", "evaluation", "fine_tuning"],
+    doc_md=DAG_DOC_MD,
 ) as dag:
     task_gate_3_split_leakage = BashOperator(
         task_id="data_quality_gate_3_leakage_check",
