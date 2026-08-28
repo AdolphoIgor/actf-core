@@ -107,6 +107,17 @@ def execute_ray_bronze_to_silver_curation(**context) -> dict[str, Any]:
     return {"status": "SUCCESS", "output_path": SILVER_URI}
 
 
+DAG_DOC_MD = """
+# Medallion Silver Preparation & Normalization Engine (`dag_03_prep_bronze_to_silver`)
+
+Executes distributed Ray Data transformations across Bronze Parquet stores:
+* **Phase 1 (Shared Ingestion):** Unicode normalization, zero-copy boilerplate stripping, and exact SHA-256 deduplication.
+* **Phase 2 (Dual-Track Domain Processing):** 
+  * Track A (NLP): Heuristic filtering, MinHash LSH fuzzy deduplication, and FastText language ID.
+  * Track B (Code/SQL): AST disambiguation, syntax tree verification via Tree-Sitter, and code-specific deduplication.
+* **Phase 3 (Reconvergence):** Presidio PII redaction, cross-dataset decontamination, and **Quality Gate 2** storage validation.
+"""
+
 default_args = {
     "owner": "airflow",
     "depends_on_past": False,
@@ -117,18 +128,18 @@ default_args = {
 }
 
 with DAG(
-    dag_id="3_prep_bronze_to_silver",
+    dag_id="dag_03_prep_bronze_to_silver",
     default_args=default_args,
     description="Distributed Ray Data In-Memory Curation: Steps 01 to 10",
-    schedule_interval=None,
+    schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["curation", "ray", "silver", "actf"],
+    doc_md=DAG_DOC_MD,
 ) as dag:
     ray_curation_task = PythonOperator(
         task_id="ray_distributed_bronze_to_silver_curation",
         python_callable=execute_ray_bronze_to_silver_curation,
-        provide_context=True,
     )
 
     quality_gate_2_task = BashOperator(
