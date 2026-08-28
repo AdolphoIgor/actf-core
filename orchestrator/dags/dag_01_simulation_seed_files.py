@@ -1,20 +1,20 @@
-import os
-import re
 import json
-import uuid
-import time
+import os
 import random
-from datetime import datetime, timezone
+import re
+import time
+import uuid
+from datetime import UTC, datetime
 
 from airflow import DAG
 from airflow.models.param import Param
 from airflow.operators.python import PythonOperator
 
 default_args = {
-    'owner': 'ai_ops',
-    'depends_on_past': False,
-    'start_date': datetime(2026, 1, 1),
-    'retries': 0,
+    "owner": "ai_ops",
+    "depends_on_past": False,
+    "start_date": datetime(2026, 1, 1),
+    "retries": 0,
 }
 
 DAG_DOC_MD = """
@@ -32,12 +32,26 @@ To optimize object storage and prevent small-file I/O bottlenecks, all documents
 FREE_TIER_MODEL_POOL = [
     {"name": "gemini-3.5-flash-lite", "sleep": 4.5},
     {"name": "gemini-3.1-flash-lite", "sleep": 4.5},
-    {"name": "gemini-3.6-flash",      "sleep": 12.5},
-    {"name": "gemini-3.5-flash",      "sleep": 12.5},
-    {"name": "gemini-3-flash",        "sleep": 12.5},
+    {"name": "gemini-3.6-flash", "sleep": 12.5},
+    {"name": "gemini-3.5-flash", "sleep": 12.5},
+    {"name": "gemini-3-flash", "sleep": 12.5},
 ]
 
-TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "JPM", "GS", "BAC", "NVDA", "TSLA", "WFC", "C", "MS", "BLK"]
+TICKERS = [
+    "AAPL",
+    "MSFT",
+    "GOOGL",
+    "AMZN",
+    "JPM",
+    "GS",
+    "BAC",
+    "NVDA",
+    "TSLA",
+    "WFC",
+    "C",
+    "MS",
+    "BLK",
+]
 LOG_PREFIXES = [
     "SYSTEM_AUDIT_TRACE",
     "SEC_MONITOR_ALERT",
@@ -46,6 +60,7 @@ LOG_PREFIXES = [
     "GITHUB_REPO_SYNC",
     "DB_QUERY_LOG",
 ]
+
 
 class ResilientGeminiPool:
     def __init__(self, models_config):
@@ -58,11 +73,11 @@ class ResilientGeminiPool:
         return self.models[self.current_index]
 
     def rotate_to_next_model(self, error_reason):
-        failed_model = self.models[self.current_index]['name']
+        failed_model = self.models[self.current_index]["name"]
         print(f"[MODEL EXHAUSTED] Model '{failed_model}' failed with error: {error_reason}")
         self.current_index += 1
         if self.current_index < len(self.models):
-            new_model = self.models[self.current_index]['name']
+            new_model = self.models[self.current_index]["name"]
             print(f"[FAILOVER SUCCESS] Rotated active LLM engine to: '{new_model}'")
         else:
             print("[FAILOVER FAILED] No remaining models available in pool.")
@@ -78,18 +93,26 @@ def apply_high_entropy_mutation(document_text: str) -> str:
             document_text = document_text.replace(ticker, random.choice(TICKERS))
 
     document_text = re.sub(r"Trader-\d+", f"Trader-{random.randint(1000, 9999)}", document_text)
-    document_text = re.sub(r"Operator ID:\s*\d+", f"Operator ID: {random.randint(1000, 9999)}", document_text)
-    document_text = re.sub(r"Account #\d+", f"Account #{random.randint(100000, 999999)}", document_text)
+    document_text = re.sub(
+        r"Operator ID:\s*\d+", f"Operator ID: {random.randint(1000, 9999)}", document_text
+    )
+    document_text = re.sub(
+        r"Account #\d+", f"Account #{random.randint(100000, 999999)}", document_text
+    )
     document_text = re.sub(r"ORD-\d+", f"ORD-{random.randint(100000, 999999)}", document_text)
-    document_text = re.sub(r"0x[0-9A-Fa-f]{6,8}", f"0x{random.randint(0x100000, 0xFFFFFF):x}", document_text)
+    document_text = re.sub(
+        r"0x[0-9A-Fa-f]{6,8}", f"0x{random.randint(0x100000, 0xFFFFFF):x}", document_text
+    )
 
     ip_replacement = f"{random.randint(10, 192)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
     document_text = re.sub(r" \d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3} ", ip_replacement, document_text)
 
     prefix = random.choice(LOG_PREFIXES)
     trace_id = str(uuid.uuid4())[:8].upper()
-    timestamp_tag = f"[{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')}.{random.randint(100, 999)}Z]"
-    
+    timestamp_tag = (
+        f"[{datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S')}.{random.randint(100, 999)}Z]"
+    )
+
     # AST-SAFE HEADER INJECTION
     if "def " in document_text or "import " in document_text:
         return f"# [{prefix}] {timestamp_tag} TRACE_ID:{trace_id}\n{document_text}"
@@ -102,7 +125,6 @@ def apply_high_entropy_mutation(document_text: str) -> str:
 
 
 def generate_unstructured_seed(client, seed_count, anomaly_focus, pool):
-    from google import genai
     from google.genai import types
 
     system_instruction = (
@@ -159,7 +181,7 @@ def generate_unstructured_seed(client, seed_count, anomaly_focus, pool):
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
                     temperature=0.88,
-                )
+                ),
             )
 
             raw_text = response.text.strip()
@@ -169,26 +191,35 @@ def generate_unstructured_seed(client, seed_count, anomaly_focus, pool):
             chunk = json.loads(raw_text)
             seed_records.extend(chunk)
             generated += len(chunk)
-            print(f"Fetched seed chunk ({len(chunk)} documents) via '{target_model}'. Progress: {generated}/{seed_count}")
+            print(
+                f"Fetched seed chunk ({len(chunk)} documents) via '{target_model}'. Progress: {generated}/{seed_count}"
+            )
 
             time.sleep(sleep_delay)
 
         except Exception as e:
             err_str = str(e)
-            if any(token in err_str.lower() for token in ["429", "resource_exhausted", "not_found", "quota", "limit"]):
+            if any(
+                token in err_str.lower()
+                for token in ["429", "resource_exhausted", "not_found", "quota", "limit"]
+            ):
                 pool.rotate_to_next_model(err_str)
             else:
-                print(f"Transient error on model '{target_model}': {err_str}. Retrying in 5 seconds...")
+                print(
+                    f"Transient error on model '{target_model}': {err_str}. Retrying in 5 seconds..."
+                )
                 time.sleep(5.0)
 
     return seed_records
 
 
 def bootstrap_and_write_file(seed_records: list, target_count: int, file_path: str):
-    print(f"Bootstrapping {len(seed_records)} seed documents up to {target_count} records into a single file...")
+    print(
+        f"Bootstrapping {len(seed_records)} seed documents up to {target_count} records into a single file..."
+    )
     seed_len = len(seed_records)
     records_written = 0
-    
+
     document_delimiter = "\n\n--- DOCUMENT BOUNDARY ---\n\n"
 
     try:
@@ -196,50 +227,60 @@ def bootstrap_and_write_file(seed_records: list, target_count: int, file_path: s
             for i in range(target_count):
                 base_text = str(seed_records[i % seed_len])
                 mutated_text = apply_high_entropy_mutation(base_text)
-                
+
                 f.write(mutated_text)
                 f.write(document_delimiter)
-                
+
                 records_written += 1
                 if records_written % 1000 == 0:
-                    print(f"File System Sync Checkpoint: {records_written}/{target_count} records appended.")
-                    
+                    print(
+                        f"File System Sync Checkpoint: {records_written}/{target_count} records appended."
+                    )
+
     except Exception as e:
         print(f"Error writing to file {file_path}: {str(e)}")
 
-    print(f"High-entropy bootstrap complete. Successfully appended {records_written} documents to {os.path.basename(file_path)}.")
+    print(
+        f"High-entropy bootstrap complete. Successfully appended {records_written} documents to {os.path.basename(file_path)}."
+    )
 
 
 def execute_live_file_generation(**context):
-    load_type = context['params']['load_type']
-    
+    from google import genai
+
+    load_type = context["params"]["load_type"]
+
     if load_type == "initial":
         target_count = 5000
         seed_target = 1000
-    else: 
+    else:
         target_count = 1000
         seed_target = 200
 
-    print(f"Initializing Synthetic Unstructured Generation. Target: {target_count} aggregated documents via mode: {load_type}")
-    
+    print(
+        f"Initializing Synthetic Unstructured Generation. Target: {target_count} aggregated documents via mode: {load_type}"
+    )
+
     if "GEMINI_API_KEY" not in os.environ:
-        raise ValueError("CRITICAL: GEMINI_API_KEY environment variable is missing from Airflow runtime.")
-        
+        raise ValueError(
+            "CRITICAL: GEMINI_API_KEY environment variable is missing from Airflow runtime."
+        )
+
     client = genai.Client()
     pool = ResilientGeminiPool(FREE_TIER_MODEL_POOL)
-    
+
     output_dir = "/opt/airflow/data/unstructured_samples"
     os.makedirs(output_dir, exist_ok=True)
-    
-    timestamp_str = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
+
+    timestamp_str = datetime.now(UTC).strftime("%Y-%m-%d-%H-%M-%S")
     target_file_path = os.path.join(output_dir, f"{timestamp_str}.txt")
     print(f"Targeting single output file for this run: {target_file_path}")
 
     foci = [
-        "Insider Trading / MNPI leakage communications", 
-        "Spoofing the order book / Market Wash Trading chat logs", 
+        "Insider Trading / MNPI leakage communications",
+        "Spoofing the order book / Market Wash Trading chat logs",
         "AML Layering via shell routing inquiries",
-        "High-frequency quote stuffing system alerts"
+        "High-frequency quote stuffing system alerts",
     ]
 
     inserted_total = 0
@@ -253,38 +294,38 @@ def execute_live_file_generation(**context):
                 client=client,
                 seed_count=current_seed_target,
                 anomaly_focus=random.choice(foci),
-                pool=pool
+                pool=pool,
             )
         except Exception as e:
             print(f"Terminating generation loop: {str(e)}")
             break
 
         bootstrap_and_write_file(seed_records, remaining_needed, target_file_path)
-        
+
         inserted_total += remaining_needed
 
-    print(f"File seeding run finished. Aggregated {inserted_total} documents into {os.path.basename(target_file_path)}.")
+    print(
+        f"File seeding run finished. Aggregated {inserted_total} documents into {os.path.basename(target_file_path)}."
+    )
 
 
 with DAG(
-    dag_id='dag_01_simulation_seed_files',
+    dag_id="dag_01_simulation_seed_files",
     default_args=default_args,
-    description='Generates live unstructured compliance text files using Gemini API',
-    schedule_interval=None,
+    description="Generates live unstructured compliance text files using Gemini API",
+    schedule=None,
     catchup=False,
-    tags=['demo', 'data_generator', 'unstructured'],
+    tags=["demo", "data_generator", "unstructured"],
     doc_md=DAG_DOC_MD,
     params={
         "load_type": Param(
-            default="incremental", 
-            type="string", 
-            enum=["initial", "incremental"], 
-            description="Determines the target volume of generated unstructured documents."
+            default="incremental",
+            type="string",
+            enum=["initial", "incremental"],
+            description="Determines the target volume of generated unstructured documents.",
         )
-    }
+    },
 ) as dag:
-
     generate_files = PythonOperator(
-        task_id='execute_llm_file_hydration',
-        python_callable=execute_live_file_generation
+        task_id="execute_llm_file_hydration", python_callable=execute_live_file_generation
     )
