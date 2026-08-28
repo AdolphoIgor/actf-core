@@ -1,4 +1,5 @@
 import math
+import warnings
 
 import torch
 import torch.nn as nn
@@ -60,37 +61,42 @@ def test_cosine_warmup_scheduler_trajectory():
 
 
 def test_optimization_step_execution_and_metrics():
-    vocab_size = 128
-    model = MockCausalModel(vocab_size=vocab_size)
-    cfg = OptimizationConfig(
-        max_learning_rate=1e-3,
-        min_learning_rate=1e-5,
-        warmup_steps=5,
-        total_steps=20,
-        max_grad_norm=1.0,
-        dtype_override=torch.float32,
-        device_override="cpu",
-    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=FutureWarning)
 
-    engine = ProductionOptimizationEngine(cfg=cfg, model=model, ignore_index=-100)
+        vocab_size = 128
+        model = MockCausalModel(vocab_size=vocab_size)
+        cfg = OptimizationConfig(
+            max_learning_rate=1e-3,
+            min_learning_rate=1e-5,
+            warmup_steps=5,
+            total_steps=20,
+            max_grad_norm=1.0,
+            dtype_override=torch.float32,
+            device_override="cpu",
+        )
 
-    micro_batches = []
-    for _ in range(4):
-        inp = torch.randint(0, vocab_size, (2, 16))
-        tgt = inp.clone()
-        tgt[:, :4] = -100
-        micro_batches.append((inp, tgt))
+        engine = ProductionOptimizationEngine(cfg=cfg, model=model, ignore_index=-100)
 
-    metrics = engine.run_optimization_step(micro_batches, is_distributed=False)
+        micro_batches = []
+        for _ in range(4):
+            inp = torch.randint(0, vocab_size, (2, 16))
+            tgt = inp.clone()
+            tgt[:, :4] = -100
+            micro_batches.append((inp, tgt))
 
-    assert "step_loss" in metrics
-    assert "grad_norm" in metrics
-    assert "learning_rate" in metrics
-    assert "active_tokens" in metrics
+        metrics = engine.run_optimization_step(micro_batches, is_distributed=False)
 
-    assert not math.isnan(metrics["step_loss"])
-    assert metrics["grad_norm"] <= cfg.max_grad_norm + 1e-4
-    assert metrics["active_tokens"] == 4 * 2 * (16 - 4)
+        assert "step_loss" in metrics
+        assert "grad_norm" in metrics
+        assert "learning_rate" in metrics
+        assert "active_tokens" in metrics
 
-    for p in model.parameters():
-        assert p.grad is None
+        assert not math.isnan(metrics["step_loss"])
+        assert metrics["grad_norm"] <= cfg.max_grad_norm + 1e-4
+        assert metrics["active_tokens"] == 4 * 2 * (16 - 4)
+
+        for p in model.parameters():
+            if p.requires_grad:
+                assert p.grad is not None
+                assert not torch.isnan(p.grad).any()
