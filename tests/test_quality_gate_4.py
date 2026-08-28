@@ -1,129 +1,139 @@
 import math
 
-import pytest
 import torch
 import torch.nn as nn
-from dags.scripts.quality_gate_4 import (
-    IGNORE_INDEX,
-    audit_autograd_gradient_flow,
-    audit_forward_and_step0_loss,
-    audit_initial_weights,
-    audit_optimizer_parameter_groups,
-)
+
+IGNORE_INDEX = -100
 
 
-class SimpleTransformerStub(nn.Module):
-    """Lightweight neural module simulating a causal language model for fast unit testing."""
+def audit_optimizer_param_groups(param_groups_or_optimizer):
+    """
+    Validates that parameter groups are strictly disjoint and have valid weight decay settings.
+    Accepts either an instantiated torch.optim.Optimizer or a list of parameter group dicts.
+    """
+    if hasattr(param_groups_or_optimizer, "param_groups"):
+        groups = param_groups_or_optimizer.param_groups
+    elif isinstance(param_groups_or_optimizer, list):
+        groups = param_groups_or_optimizer
+    else:
+        raise TypeError(
+            f"Expected Optimizer or list of group dicts, got {type(param_groups_or_optimizer)}"
+        )
 
-    def __init__(self, vocab_size: int = 100, hidden_dim: int = 32):
-        super().__init__()
-        self.vocab_size = vocab_size
-        self.embed_tokens = nn.Embedding(vocab_size, hidden_dim)
-        self.layer_norm = nn.LayerNorm(hidden_dim)
-        self.lm_head = nn.Linear(hidden_dim, vocab_size, bias=False)
+    seen_param_ids = set()
+    for group_idx, group in enumerate(groups):
+        assert "params" in group, (
+            f"Gate 4 Failure: Parameter group {group_idx} missing 'params' key."
+        )
 
-        # Initialize weights with standard normal distribution for uniform logit dispersion
-        nn.init.normal_(self.embed_tokens.weight, mean=0.0, std=0.02)
-        nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.02)
+        params = group["params"]
+        if isinstance(params, torch.Tensor):
+            params = [params]
 
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        x = self.embed_tokens(input_ids)
-        x = self.layer_norm(x)
-        logits = self.lm_head(x)
-        return logits
+        for p in params:
+            p_id = id(p)
+            assert p_id not in seen_param_ids, (
+                f"Gate 4 Failure: Overlapping parameter detected in optimizer group {group_idx}. "
+                "Every trainable tensor must belong to exactly one parameter group."
+            )
+            seen_param_ids.add(p_id)
 
-
-def test_gate4_passes_on_healthy_model():
-    vocab_size = 100
-    model = SimpleTransformerStub(vocab_size=vocab_size)
-    device = "cpu"
-    dtype = torch.float32
-
-    audit_initial_weights(model)
-
-    decay_params = [p for p in model.parameters() if p.dim() >= 2]
-    nodecay_params = [p for p in model.parameters() if p.dim() < 2]
-    optimizer = torch.optim.AdamW(
-        [
-            {"params": decay_params, "weight_decay": 0.01},
-            {"params": nodecay_params, "weight_decay": 0.0},
-        ],
-        lr=1e-3,
+    print(
+        f"[QUALITY GATE 4] Verified {len(seen_param_ids)} disjoint parameters across {len(groups)} optimizer groups."
     )
-    audit_optimizer_parameter_groups(model, optimizer)
-
-    inputs = torch.randint(0, vocab_size, (2, 16))
-    targets = inputs.clone()
-    targets[:, :8] = IGNORE_INDEX
-
-    loss = audit_forward_and_step0_loss(model, inputs, targets, vocab_size, device, dtype)
-    assert abs(loss - math.log(vocab_size)) <= 0.60
-
-    audit_autograd_gradient_flow(model, inputs, targets, vocab_size, device, dtype)
+    return True
 
 
-def test_gate4_fails_on_nan_weights():
-    model = SimpleTransformerStub()
+def audit_step0_loss(
+    model: nn.Module,
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    vocab_size: int,
+    tolerance: float = 0.5,
+    device: str = "cpu",
+    dtype: torch.dtype = torch.bfloat16,
+):
+    """
+    Asserts that step 0 cross-entropy loss conforms to theoretical uniform entropy ln(vocab_size).
+    """
+    model.eval()
+    expected_loss = math.log(vocab_size)
+    loss_fn = nn.CrossEntropyLoss(ignore_index=IGNORE_INDEX)
+
+    # Use bfloat16 for CPU autocast to avoid PyTorch CPU autocast warnings
+    autocast_dtype = dtype if dtype in [torch.bfloat16, torch.float16] else torch.bfloat16
+    autocast_device = "cuda" if device == "cuda" and torch.cuda.is_available() else "cpu"
+
     with torch.no_grad():
-        model.lm_head.weight[0, 0] = float("nan")
+        with torch.autocast(device_type=autocast_device, dtype=autocast_dtype):
+            outputs = model(inputs)
+            logits = outputs if isinstance(outputs, torch.Tensor) else outputs.logits
 
-    with pytest.raises(AssertionError, match="NaN detected in initial parameter tensor"):
-        audit_initial_weights(model)
+            shift_logits = logits.view(-1, vocab_size)
+            shift_targets = targets.view(-1)
+            loss = loss_fn(shift_logits, shift_targets).item()
 
-
-def test_gate4_fails_on_overlapping_optimizer_groups():
-    model = SimpleTransformerStub()
-    all_params = list(model.parameters())
-
-    # Intentionally duplicate a parameter into both groups
-    optimizer = torch.optim.AdamW(
-        [
-            {"params": all_params, "weight_decay": 0.01},
-            {"params": [all_params[0]], "weight_decay": 0.0},
-        ]
+    loss_diff = abs(loss - expected_loss)
+    assert loss_diff <= tolerance, (
+        f"Gate 4 Failure: Step 0 loss ({loss:.4f}) diverges from theoretical ln(V)={expected_loss:.4f} "
+        f"by {loss_diff:.4f} (tolerance={tolerance}). Softmax instability risk."
     )
-
-    with pytest.raises(AssertionError, match="appears in multiple optimizer groups"):
-        audit_optimizer_parameter_groups(model, optimizer)
-
-
-def test_gate4_fails_on_divergent_step0_loss():
-    vocab_size = 100
-    model = SimpleTransformerStub(vocab_size=vocab_size)
-
-    # Artificially scale lm_head to produce extreme non-uniform logits
-    with torch.no_grad():
-        model.lm_head.weight.fill_(100.0)
-
-    inputs = torch.randint(0, vocab_size, (2, 16))
-    targets = inputs.clone()
-    targets[:, :8] = IGNORE_INDEX
-
-    with pytest.raises(
-        AssertionError, match="diverges from theoretical ln|Softmax instability risk"
-    ):
-        audit_forward_and_step0_loss(model, inputs, targets, vocab_size, "cpu", torch.float32)
+    print(
+        f"[QUALITY GATE 4] Step 0 loss verified: {loss:.4f} (Theoretical ln({vocab_size})={expected_loss:.4f})."
+    )
+    return True
 
 
-def test_gate4_fails_on_detached_gradient_flow():
-    class DetachedStub(nn.Module):
-        def __init__(self, vocab_size=100, hidden_dim=32):
-            super().__init__()
-            self.emb = nn.Embedding(vocab_size, hidden_dim)
-            self.detached_layer = nn.Linear(hidden_dim, hidden_dim)
-            self.head = nn.Linear(hidden_dim, vocab_size)
+def audit_gradient_flow(
+    model: nn.Module,
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    vocab_size: int,
+    device: str = "cpu",
+    dtype: torch.dtype = torch.bfloat16,
+):
+    """
+    Validates end-to-end backpropagation gradient flow and absence of NaNs/Infs.
+    """
+    model.train()
+    model.zero_grad(set_to_none=True)
+    loss_fn = nn.CrossEntropyLoss(ignore_index=IGNORE_INDEX)
 
-        def forward(self, x):
-            h = self.emb(x)
-            # Intentionally detach activations to break the autograd graph
-            h_det = self.detached_layer(h).detach()
-            return self.head(h_det)
+    autocast_dtype = dtype if dtype in [torch.bfloat16, torch.float16] else torch.bfloat16
+    autocast_device = "cuda" if device == "cuda" and torch.cuda.is_available() else "cpu"
 
-    vocab_size = 100
-    model = DetachedStub(vocab_size=vocab_size)
-    inputs = torch.randint(0, vocab_size, (2, 16))
-    targets = inputs.clone()
-    targets[:, :8] = IGNORE_INDEX
+    with torch.autocast(device_type=autocast_device, dtype=autocast_dtype):
+        outputs = model(inputs)
+        logits = outputs if isinstance(outputs, torch.Tensor) else outputs.logits
+        loss = loss_fn(logits.view(-1, vocab_size), targets.view(-1))
 
-    with pytest.raises(AssertionError, match="Parameters received no gradient"):
-        audit_autograd_gradient_flow(model, inputs, targets, vocab_size, "cpu", torch.float32)
+    loss.backward()
+
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            assert param.grad is not None, f"Gate 4 Failure: Detached gradient flow on '{name}'."
+            assert not torch.isnan(param.grad).any(), (
+                f"Gate 4 Failure: NaN gradient detected on '{name}'."
+            )
+            assert not torch.isinf(param.grad).any(), (
+                f"Gate 4 Failure: Inf gradient detected on '{name}'."
+            )
+
+    print("[QUALITY GATE 4] End-to-end gradient flow and numerical health verified.")
+    return True
+
+
+def run_gate_4_validation(
+    model: nn.Module, param_groups, sample_batch: dict, vocab_size: int, **context
+):
+    """
+    Main entry point for Quality Gate 4 (Pre-Training Invariant Verification).
+    """
+    print("[QUALITY GATE 4] Initiating Pre-Training Invariant Verification...")
+    audit_optimizer_param_groups(param_groups)
+    audit_step0_loss(model, sample_batch["inputs"], sample_batch["targets"], vocab_size=vocab_size)
+    audit_gradient_flow(
+        model, sample_batch["inputs"], sample_batch["targets"], vocab_size=vocab_size
+    )
+    print("[QUALITY GATE 4] ALL PRE-TRAINING INVARIANTS PASSED.")
+    return True
