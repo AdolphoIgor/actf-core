@@ -235,6 +235,15 @@ def execute_step_17_mlflow_promotion(**context) -> dict[str, Any]:
     return summary
 
 
+DAG_DOC_MD = """
+# Model Evaluation & Production Promotion Gatekeeper (`dag_05_model_eval`)
+
+Orchestrates post-training evaluation and automated registry promotion:
+* **Gold Benchmark Evaluation:** Computes multi-task loss and exact-match metrics against held-out compliance validation splits.
+* **LLM Judge Scoring:** Evaluates reasoning trajectory quality, instruction-following fidelity, and hallucination rates.
+* **Gatekeeper Automated Decision:** Enforces **Quality Gate 5** metric thresholds before triggering MLflow Model Registry promotion.
+"""
+
 default_args = {
     "owner": "airflow",
     "depends_on_past": False,
@@ -245,13 +254,14 @@ default_args = {
 }
 
 with DAG(
-    dag_id="5_model_eval",
+    dag_id="dag_05_model_eval",
     default_args=default_args,
     description="ACTF Continuous Model Evaluation & Gatekeeper Promotion: Steps 15-17 & Gate 5",
-    schedule_interval=None,
+    schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["evaluation", "gatekeeper", "mlflow", "promotion", "actf"],
+    doc_md=DAG_DOC_MD,
 ) as dag:
     task_gold_benchmarks = PythonOperator(
         task_id="step_15_gold_benchmark_evaluation",
