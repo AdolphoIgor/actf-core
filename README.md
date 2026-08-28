@@ -154,7 +154,7 @@ actf-core/
     │   ├── dag_01_simulation_seed_files.py
     │   ├── dag_02_ingest_source_to_bronze.py
     │   ├── dag_03_prep_bronze_to_silver.py
-    │   ├── dag_04_train_and_eval_model.py
+    │   ├── dag_04_model_train.py
     │   ├── dag_05_model_eval.py
     │   └── scripts/
     │       ├── quality_gate_1.py
