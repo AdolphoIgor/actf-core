@@ -10,6 +10,146 @@
 
 The platform bridges relational data lakehouses, distributed compute clusters, in-memory autograd engines, and automated statistical evaluation firewalls into an immutable, deterministic training loop.
 
+```mermaid
+
+  flowchart TD
+      %% Global Styling
+      classDef storage fill:#eceff1,stroke:#455a64,stroke-width:1px,color:#263238
+      classDef gate fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#bf360c
+      classDef task fill:#e8f0fe,stroke:#1a73e8,stroke-width:1px,color:#0d47a1
+      classDef ray fill:#e1f5fe,stroke:#0288d1,stroke-dasharray: 5 5,stroke-width:1px,color:#01579b
+      classDef registry fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
+
+      %% -----------------------------------------------------------
+      %% Datasources
+      %% -----------------------------------------------------------
+      subgraph global["Flow"]
+        direction TB
+
+        subgraph Sources["Data Sources"]
+
+            S_PG["RBDMS<br/>(Transactional Records)"]:::storage
+            S_FILE["Object Storage / S3 / File Systems<br/>(Unstructured Raw Files)"]:::storage
+        end
+
+        subgraph DAG_02["Ingest Source to Bronze"]
+            direction TB
+            T_ING_PG["Apache Spark: ingest_postgres_to_bronze"]:::task
+            T_ING_FS["Ray Data: ingest_files_to_bronze"]:::task
+            B_STORE[("Bronze Storage Layer")]:::storage
+            QG1{"Quality Gate 1<br/>Schema Validation &<br/>Zero-Byte File Checks"}:::gate
+
+            T_ING_PG --> B_STORE
+            T_ING_FS --> B_STORE
+            B_STORE --> QG1
+        end
+
+        S_PG --> T_ING_PG
+        S_FILE --> T_ING_FS
+
+        %% -----------------------------------------------------------
+        %% Data Preparation Plane (Silver)
+        %% -----------------------------------------------------------
+        subgraph DAG_03["Ray Data & PyArrow"]
+            direction TB
+            
+            subgraph P1["Bronze to Silver"]
+                S01["Step 01: Hybrid Unicode Normalization"]:::task
+                S02["Step 02: Zero-Copy C++ Boilerplate Stripping"]:::task
+                S03["Step 03: Exact Cryptographic Deduplication"]:::task
+                S04["Step 04: Metadata Inspection & Routing"]:::task
+                
+                S01 --> S02 --> S03 --> S04
+            end
+
+            subgraph P2["Domain-Specific Processing"]
+                subgraph TrackA["Track A: Natural Language"]
+                    S05A["Step 05a: Standard Text Heuristics"]:::task
+                    S06A["Step 06a: MinHash Fuzzy Deduplication"]:::task
+                    S07A["Step 07a: Natural Language CQF"]:::task
+                    S08A["Step 08a: FastText Language ID"]:::task
+                    
+                    S05A --> S06A --> S07A --> S08A
+                end
+
+                subgraph TrackB["Track B: Code & Syntax"]
+                    S05B["Step 05b: AST Disambiguation<br/>(ADR-0024)"]:::task
+                    S06B["Step 06b: AST Code MinHash Deduplication"]:::task
+                    S07B["Step 07b: Domain Quality Checks"]:::task
+                    S08B["Step 08b: Strict Syntax Verification"]:::task
+                    
+                    S05B --> S06B --> S07B --> S08B
+                end
+            end
+
+            subgraph P3["Reconvergence & Safety"]
+                S09["Step 09: PII Redaction & Safety Filtering"]:::task
+                S10["Step 10: Cross-Dataset Decontamination"]:::task
+                
+                S09 --> S10
+            end
+
+            QG2{"Quality Gate 2<br/>Deduplication Ratio &<br/>Contamination Verifier"}:::gate
+            S_STORE[("Silver Storage Layer")]:::storage
+
+            S04 -->|Natural Language| S05A
+            S04 -->|Code| S05B
+            S08A --> S09
+            S08B --> S09
+            S10 --> QG2
+            QG2 -->|Pass| S_STORE
+        end
+
+        QG1 -->|Pass| S01
+
+        %% -----------------------------------------------------------
+        %% Training Plane (Gold Preparation)
+        %% -----------------------------------------------------------
+        subgraph DAG_04["Model Training"]
+            direction TB
+            
+            S11["Step 11: Pre-Tokenization Audit & Schema Alignment"]:::task
+            S12["Step 12: Tokenization & ChatML Sequence Packing, Zero-Copy Arrow Tables"]:::task
+            QG3{"Quality Gate 3<br/>Token Distribution &<br/>EOS Alignment Audit"}:::gate
+            
+            subgraph RayTrain["Ray (Train/Data) Cluster"]
+                S13["Step 13: Parameter Optimization Loop<br/>Distributed Backpropagation<br/>Gradient Sync"]:::ray
+            end
+
+            S14["Step 14: Ephemeral Staging Export<br/>Consolidated Checkpoint & Artifact Build"]:::task
+            QG4{"Quality Gate 4<br/>Loss Convergence &<br/>Numeric Health Gate"}:::gate
+            M_STAGING[("Ephemeral Model Staging<br/>Saved Tensors & Configs")]:::storage
+
+            S11 --> S12 --> QG3
+            QG3 -->|Pass| S13
+            S13 --> S14 --> QG4
+            QG4 -->|Pass| M_STAGING
+        end
+
+        S_STORE --> S11
+
+          %% -----------------------------------------------------------
+          %% Evaluation & Governance Plane
+          %% -----------------------------------------------------------
+          subgraph DAG_05["Model Evaluation"]
+              direction TB
+              
+              S15["Step 15: Gold Benchmark Suite<br/>Deterministic Reference Test Execution"]:::task
+              S16["Step 16: LLM-as-a-Judge Scoring<br/>Multi-Dimensional Semantic Evaluation"]:::task
+              G05{"Gate 05: Automated Gatekeeper<br/>Threshold Verification<br/>(Strict Score Enforcer)"}:::gate
+              S17["Step 17: MLflow Model Registry<br/>Production Tagging & Version Promotion"]:::registry
+
+              S15 --> S16 --> G05
+              G05 -->|Pass| S17
+          end
+
+          M_STAGING --> S15
+
+      end
+```
+
+## Compact View
+
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                               ACTF CORE END-TO-END SYSTEM TOPOLOGY                               │
